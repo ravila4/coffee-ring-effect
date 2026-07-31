@@ -298,3 +298,15 @@ test('structural deposits paint sharper and darker than dots and residue', () =>
   assert.deepEqual(residue, dot);
   assert.ok(pinned.aHi >= spoke.aHi, 'rim mass stays the darkest population');
 });
+
+test('tracer count is a resolution knob: painted ink mass stays put', () => {
+  // Total pigment is set by phi, not by how many tracers discretize it, so
+  // per-splat alpha must scale inversely with the tracer budget — otherwise
+  // a high-resolution render paints a darker stain of the same coffee.
+  const ink = (particles) => {
+    const stain = buildStain({ seed: 5, radius: 100, particles, type: 'drop', splashEnergy: 0 });
+    return stain.splats.reduce((t, s) => t + s.alpha * s.r * s.r, 0);
+  };
+  const ratio = ink(14000) / ink(3500);
+  assert.ok(ratio > 0.75 && ratio < 1.35, `ink mass scaled with tracer count: ratio ${ratio.toFixed(2)}`);
+});

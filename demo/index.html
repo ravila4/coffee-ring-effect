@@ -23,14 +23,31 @@
   .ctl:last-child .tip { left: auto; right: 0; }
   .tip[hidden] { display: none; }
   .hint { font-size: .78rem; color: #8a7a60; }
-  p.note { padding: 0 2rem .2rem; max-width: 62rem; color: #6b5b44; }
-  main { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; padding: 1rem 2rem 3rem; }
-  /* Cap at 4 so the 12 stains always fill whole rows; below this the auto-fill
-     count is already a divisor of 12. */
-  @media (min-width: 1360px) { main { grid-template-columns: repeat(4, 1fr); } }
-  figure { margin: 0; background: #fffdf7; border: 1px solid #e4d9c2; border-radius: 8px; padding: .6rem; }
+  p.note { padding: 0 2rem .2rem; max-width: 62rem; margin-left: auto; margin-right: auto; color: #6b5b44; }
+  p.note:last-of-type { padding-bottom: 2.5rem; }
+  /* Six stains, three across: the max-width stops auto-fill short of a fourth
+     column, so the grid is always whole 3-wide rows, centered. */
+  main { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem; padding: 1rem 2rem 2rem; max-width: 1160px; margin: 0 auto; box-sizing: border-box; }
+  figure { position: relative; margin: 0; background: #fffdf7; border: 1px solid #e4d9c2; border-radius: 8px; padding: .6rem; }
+  /* A tile keeps its last stain, dimmed, while its replacement brews. */
+  figure.brewing canvas { opacity: .25; }
+  figure.brewing::after {
+    content: ''; position: absolute; top: 50%; left: 50%; width: 28px; height: 28px;
+    margin: -14px 0 0 -14px; border: 3px solid #e4d9c2; border-top-color: #8a6b3f;
+    border-radius: 50%; animation: brew-spin .8s linear infinite;
+  }
+  @keyframes brew-spin { to { transform: rotate(360deg); } }
   canvas { width: 100%; height: auto; display: block; cursor: pointer; }
   figcaption { font-size: .78rem; color: #8a7a60; text-align: center; padding-top: .4rem; font-variant-numeric: tabular-nums; }
+  /* Dark-field flips the page to match the black canvases; the control
+     surfaces keep their cream palette so they stay recognizable. */
+  body.darkfield { background: #171310; color: #cbbfa8; }
+  body.darkfield .controls, body.darkfield p.note, body.darkfield .hint { color: #a2937b; }
+  body.darkfield figure { background: #000; border-color: #37302a; }
+  body.darkfield figure.brewing::after { border-color: #37302a; border-top-color: #cbbfa8; }
+  /* Dark-field changes the view, not the coffee — it sits apart from the
+     simulation knobs at the far end of the bar. */
+  .ctl.view { margin-left: auto; }
 </style>
 </head>
 <body>
@@ -100,7 +117,18 @@
       shrink the stain when you want to see a whole splatter.
     </div>
   </span>
+  <span class="ctl view">
+    <label><input type="checkbox" id="dark"> dark-field</label>
+    <button class="help" type="button" aria-controls="help-dark" aria-expanded="false" aria-label="what does dark-field do?">?</button>
+    <div class="tip" id="help-dark" hidden>
+      The microscope view: every particle glows white on black, as in Deegan's
+      micrographs. Structure the brown wash hides, like the arch rows inside
+      the rim and the branching veins, stands out. Same simulation, only the
+      paint changes.
+    </div>
+  </span>
 </div>
+<main id="grid"></main>
 <p class="note">
   Each stain is a drying puddle of coffee, simulated one particle at a time.
   The edge of a real puddle sticks to the surface under it rather than
@@ -129,9 +157,8 @@
   The smallest of those carry too few particles to build a rim and dry as flat
   specks.
 </p>
-<main id="grid"></main>
 <script type="module">
-import { generateStainCanvas } from '../src/render.js';
+import { generateStainCanvas, paintStain } from '../src/render.js';
 
 const SIZE = 560;
 const grid = document.getElementById('grid');
@@ -147,6 +174,12 @@ const phiFrom = (v) => lerpLog(0.0005, 0.03, v / 100);
 const params = () => ({
   type: $('type').value,
   radiusFraction: $('frac').value / 100,
+  // One simulation serves both views — the dark-field toggle repaints the
+  // cached stain, never re-brews, so the microscope shows the SAME stain.
+  // The count sits high for dark-field density; beige splat alpha
+  // normalizes against the tracer budget in the renderer.
+  particles: 12000,
+  darkField: $('dark').checked,
   ...($('weAuto').checked ? {} : { splashEnergy: weFrom($('we').value) }),
   ...($('phiAuto').checked ? {} : { dropOverrides: { phi: phiFrom($('phi').value) } }),
 });
@@ -155,9 +188,12 @@ const cells = [];
 function makeCell(seed) {
   const fig = document.createElement('figure');
   const canvas = document.createElement('canvas');
+  // Square placeholder so an unbrewed tile already has its final footprint.
+  canvas.width = canvas.height = SIZE;
   const cap = document.createElement('figcaption');
+  cap.textContent = ' ';
   fig.append(canvas, cap);
-  const cell = { seed, canvas, cap };
+  const cell = { seed, fig, canvas, cap };
   canvas.addEventListener('click', () => {
     cell.seed = randomSeed();
     drawCell(cell);
@@ -169,12 +205,30 @@ function makeCell(seed) {
 function drawCell(cell) {
   const t0 = performance.now();
   const { stain } = generateStainCanvas({ size: SIZE, seed: cell.seed, canvas: cell.canvas, ...params() });
+  cell.stain = stain;
   const ms = (performance.now() - t0).toFixed(0);
   cell.cap.textContent =
     `seed ${cell.seed} · ${stain.type} · We ${stain.splashEnergy.toFixed(0)} · ${ms} ms`;
 }
 
-const redrawAll = () => cells.forEach(drawCell);
+// Resolves after the browser has painted, so each finished stain (and the
+// spinners on the tiles still waiting) actually reaches the screen between
+// the ~200 ms synchronous brews.
+const afterPaint = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+
+// Brewing yields to the page between stains; a fresh call (new batch or a
+// changed control) supersedes any loop still in flight.
+let brewRun = 0;
+async function redrawAll() {
+  const run = ++brewRun;
+  for (const cell of cells) cell.fig.classList.add('brewing');
+  for (const cell of cells) {
+    await afterPaint();
+    if (run !== brewRun) return;
+    drawCell(cell);
+    cell.fig.classList.remove('brewing');
+  }
+}
 
 const showValues = () => {
   $('weOut').textContent = $('weAuto').checked ? 'auto' : weFrom($('we').value).toFixed(0);
@@ -192,6 +246,17 @@ for (const id of ['we', 'phi', 'frac']) {
 for (const id of ['type', 'weAuto', 'phiAuto']) {
   $(id).addEventListener('change', () => { showValues(); redrawAll(); });
 }
+$('dark').addEventListener('change', () => {
+  document.body.classList.toggle('darkfield', $('dark').checked);
+  // Repaint the cached stains — same simulation, different microscope. A
+  // tile still brewing has no stain yet; it picks up the mode when it lands.
+  for (const cell of cells) {
+    if (!cell.stain) continue;
+    const ctx = cell.canvas.getContext('2d');
+    ctx.clearRect(0, 0, cell.canvas.width, cell.canvas.height);
+    paintStain(ctx, cell.stain, { cx: SIZE / 2, cy: SIZE / 2, darkField: $('dark').checked });
+  }
+});
 
 // Help popovers: one open at a time, dismissed by Escape or a click elsewhere.
 const helpButtons = [...document.querySelectorAll('button.help')];
@@ -219,11 +284,14 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeHelp(
 const brew = () => {
   grid.replaceChildren();
   cells.length = 0;
-  for (let i = 0; i < 12; i++) grid.append(makeCell(randomSeed()));
+  for (let i = 0; i < 6; i++) grid.append(makeCell(randomSeed()));
   redrawAll();
 };
 document.getElementById('rebrew').addEventListener('click', brew);
 showValues();
+// ?dark=1 boots straight into the microscope view (and lets the headless
+// screenshot loop verify it).
+if (new URLSearchParams(location.search).has('dark')) $('dark').click();
 brew();
 </script>
 </body>

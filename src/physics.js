@@ -216,7 +216,13 @@ export function settleInterior({ items, total, cusps, tEnd, rng, forceSink = nul
 // depinSchedule ([{t}], forces depin onsets) and holeSchedule ([{t, theta,
 // halfWidth, arrestDepth}], forces individual holes) exist for deterministic
 // tests; both drive the identical epoch machinery.
-export function simulateDrop({
+//
+// makeDropStepper exposes the integration one dt at a time with the live
+// state (rho/theta/alive, deposits so far, epoch radius and ring width)
+// readable between steps — the drying animation drives it frame by frame.
+// step() past the end is a no-op; finish() settles the interior once.
+// simulateDrop runs the same machinery to completion.
+export function makeDropStepper({
   particles = 3000,
   steps = 300,
   tEnd = 0.98,
@@ -228,7 +234,7 @@ export function simulateDrop({
   pinningAt = null, // θ → [0,1] strength, read as hold fraction of the drying
   rng,
 } = {}) {
-  if (!rng) throw new Error('simulateDrop requires a seeded rng');
+  if (!rng) throw new Error('makeDropStepper requires a seeded rng');
 
   const dt = tEnd / steps;
   const rho = new Float64Array(particles);
@@ -336,7 +342,11 @@ export function simulateDrop({
     });
   };
 
-  for (let s = 0; s < steps; s++) {
+  let s = 0;
+  let finished = false;
+  const isDone = () => freeRecession || s >= steps;
+
+  const stepOnce = () => {
     const t = s * dt;
     epoch.growth.step(dt / (1 - epoch.tStart));
     const w = epoch.growth.w;
@@ -394,11 +404,12 @@ export function simulateDrop({
           // the line never re-pins. The interior settles via the recession
           // pass after the loop.
           freeRecession = true;
-          break;
+          return;
         }
         const thetaEpoch = Math.min(1, (1 - t) / Math.pow(rNext, 3));
         epoch = newEpoch(rNext, t, thetaEpoch);
-        continue; // rebuild bins next step under the new epoch
+        s++;
+        return; // rebuild bins next step under the new epoch
       }
     }
 
@@ -444,32 +455,57 @@ export function simulateDrop({
         rho[i] = r;
       }
     }
-  }
+    s++;
+  };
 
-  if (!freeRecession) recordEpoch(null);
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    if (!freeRecession) recordEpoch(null);
 
-  // Interior settlement: if the liquid was still pinned at dry-out the
-  // residue stays where it was (the dense speckle of high-φ interiors); if
-  // the line was receding — free recession, or mid-depinning at tEnd — the
-  // sweep organizes it into arcs, spokes, and dots.
-  const sweeping = freeRecession || events[events.length - 1].tOnset !== null;
-  events[events.length - 1].interiorMode = sweeping ? 'recession' : 'pinned';
-  const leftovers = [];
-  for (let i = 0; i < particles; i++) {
-    if (alive[i]) leftovers.push({ rho: rho[i], theta: theta[i] });
-  }
-  if (sweeping) {
-    const n = 18 + rng.int(13);
-    const cuspOffset = rng.uniform(0, TWO_PI / n);
-    const cusps = Array.from({ length: n }, (_, k) => cuspOffset + (k / n) * TWO_PI);
-    deposits.push(
-      ...settleInterior({ items: leftovers, total: particles, cusps, tEnd, rng, forceSink: interiorSink }),
-    );
-  } else {
-    for (const p of leftovers) deposits.push({ rho: p.rho, theta: p.theta, t: tEnd, pinned: false });
-  }
+    // Interior settlement: if the liquid was still pinned at dry-out the
+    // residue stays where it was (the dense speckle of high-φ interiors); if
+    // the line was receding — free recession, or mid-depinning at tEnd — the
+    // sweep organizes it into arcs, spokes, and dots.
+    const sweeping = freeRecession || events[events.length - 1].tOnset !== null;
+    events[events.length - 1].interiorMode = sweeping ? 'recession' : 'pinned';
+    const leftovers = [];
+    for (let i = 0; i < particles; i++) {
+      if (alive[i]) leftovers.push({ rho: rho[i], theta: theta[i] });
+    }
+    if (sweeping) {
+      const n = 18 + rng.int(13);
+      const cuspOffset = rng.uniform(0, TWO_PI / n);
+      const cusps = Array.from({ length: n }, (_, k) => cuspOffset + (k / n) * TWO_PI);
+      deposits.push(
+        ...settleInterior({ items: leftovers, total: particles, cusps, tEnd, rng, forceSink: interiorSink }),
+      );
+    } else {
+      for (const p of leftovers) deposits.push({ rho: p.rho, theta: p.theta, t: tEnd, pinned: false });
+    }
+  };
 
-  return { deposits, events };
+  return {
+    rho,
+    theta,
+    alive,
+    deposits,
+    events,
+    get t() { return s * dt; },
+    get done() { return isDone(); },
+    get aliveCount() { return aliveCount; },
+    get base() { return epoch.base; },
+    get ringW() { return epoch.growth.w; },
+    step() { if (!isDone()) stepOnce(); },
+    finish,
+  };
+}
+
+export function simulateDrop(options) {
+  const sim = makeDropStepper(options);
+  while (!sim.done) sim.step();
+  sim.finish();
+  return { deposits: sim.deposits, events: sim.events };
 }
 
 // Supply profile for a rim drip: finite volume wicking both ways along the

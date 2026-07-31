@@ -9,6 +9,7 @@ import {
   satelliteSpecsFor,
   rangeShape,
   speckCutoff,
+  splatStyleFor,
   trailSpecsFor,
 } from '../src/render.js';
 
@@ -282,4 +283,18 @@ test('splatter build is deterministic per seed', () => {
   const b = buildStain({ seed: 33, radius: 100, particles: 300, type: 'drop', splashEnergy: 200 });
   assert.deepEqual(a.splats, b.splats);
   assert.deepEqual(a.washes, b.washes);
+});
+
+test('structural deposits paint sharper and darker than dots and residue', () => {
+  const spoke = splatStyleFor({ pinned: false, sink: 'spoke' });
+  const arc = splatStyleFor({ pinned: false, sink: 'arc' });
+  const dot = splatStyleFor({ pinned: false, sink: 'dot' });
+  const residue = splatStyleFor({ pinned: false });
+  const pinned = splatStyleFor({ pinned: true });
+  for (const structural of [spoke, arc]) {
+    assert.ok(structural.r < dot.r, 'structure must be smaller than speckle');
+    assert.ok(structural.aLo > dot.aHi, 'structure must out-darken speckle outright');
+  }
+  assert.deepEqual(residue, dot);
+  assert.ok(pinned.aHi >= spoke.aHi, 'rim mass stays the darkest population');
 });

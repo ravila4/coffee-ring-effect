@@ -7,8 +7,8 @@ import { makeRng } from '../src/rng.js';
 // extraction: same seed, same floats. Two seeds cover both endgames —
 // dilute (recession sweep) and strong (pinned interior).
 const GOLDEN = [
-  { seed: 7, phi: 0.004, n: 400, pinned: 374, sumRho: 368.01867819118, sumTheta: 1486.5487946879648, nEvents: 2, interiorMode: 'recession' },
-  { seed: 42, phi: 0.02, n: 400, pinned: 373, sumRho: 364.9272494856573, sumTheta: 1517.0524186257267, nEvents: 2, interiorMode: 'pinned' },
+  { seed: 7, phi: 0.004, n: 400, pinned: 382, sumRho: 376.32363169135107, sumTheta: 1374.31062279605, nEvents: 2, interiorMode: 'recession' },
+  { seed: 42, phi: 0.02, n: 400, pinned: 386, sumRho: 373.2311299517806, sumTheta: 1302.7012795931223, nEvents: 2, interiorMode: 'pinned' },
 ];
 
 const OPTS = { particles: 400, steps: 120, tEnd: 0.97, diffusion: 0.02 };

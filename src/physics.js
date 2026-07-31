@@ -74,6 +74,7 @@ export function radialVelocity(rho, t) {
 const NBINS = 512; // azimuthal contact-line bins; oversamples 0.02-0.07 rad holes
 const GRAIN = 0.004; // deposit jitter at the interface, a few grain diameters
 const SEVER_COVERAGE = 0.63; // N·⟨L⟩ ~ C (paper) → 1−e⁻¹ union coverage
+const MAX_ARCH_GENERATION = 2; // parent + 2 layers of subarches per epoch
 const TWO_PI = 2 * Math.PI;
 
 const wrap = (theta) => ((theta % TWO_PI) + TWO_PI) % TWO_PI;
@@ -151,27 +152,101 @@ export function chooseInteriorSink(load, rng) {
   return 'dot';
 }
 
+// The receding line organizes itself into a series of cusps that emit
+// particles (PRE 61 §IV). Cusp-to-cusp distance stays roughly constant in
+// arc length (~0.06·R; Figs. 13–14), so as the front's circumference
+// shrinks, cusps merge — seen outward, that's a vein Y-junction. Between
+// merges each cusp wanders, which is why real spokes wiggle. The evolution
+// is precomputed in radial slabs; spoke emission reads the live cusp set at
+// the particle's pickup radius.
+const FRONT_STEP = 0.02; // radial slab per cusp-evolution step
+export function traceCuspFront({ rho0, spacing, wander, rng }) {
+  let thetas = [];
+  const count0 = Math.max(3, Math.round((TWO_PI * rho0) / spacing));
+  const offset = rng.uniform(0, TWO_PI / count0);
+  for (let k = 0; k < count0; k++) {
+    thetas.push(offset + (k / count0) * TWO_PI + rng.gaussian() * 0.15 * (spacing / rho0));
+  }
+  const levels = [{ rho: rho0, thetas: [...thetas] }];
+  for (let rho = rho0 - FRONT_STEP; rho > 0; rho -= FRONT_STEP) {
+    const sigma = (wander * FRONT_STEP) / Math.max(rho, 0.12);
+    thetas = thetas.map((th) => th + rng.gaussian() * sigma).sort((a, b) => wrap(a) - wrap(b));
+    const target = Math.max(3, Math.round((TWO_PI * rho) / spacing));
+    while (thetas.length > target) {
+      // Merge the closest adjacent pair (circularly): the two veins join.
+      let best = 0;
+      let bestGap = Infinity;
+      for (let k = 0; k < thetas.length; k++) {
+        const next = thetas[(k + 1) % thetas.length];
+        let gap = Math.abs(wrap(next) - wrap(thetas[k]));
+        if (gap > Math.PI) gap = TWO_PI - gap;
+        if (gap < bestGap) {
+          bestGap = gap;
+          best = k;
+        }
+      }
+      const a = thetas[best];
+      const b = thetas[(best + 1) % thetas.length];
+      const mergedTheta = a + (circGapSigned(a, b) / 2);
+      thetas.splice(best, 1);
+      thetas[best % thetas.length] = mergedTheta;
+    }
+    levels.push({ rho, thetas: [...thetas] });
+  }
+  return levels;
+}
+
+const circGapSigned = (from, to) => {
+  let d = wrap(to) - wrap(from);
+  if (d > Math.PI) d -= TWO_PI;
+  if (d < -Math.PI) d += TWO_PI;
+  return d;
+};
+
 // The recession pass: the freed contact line sweeps the interior outside-in,
 // settling each still-suspended particle through a load-dependent sink.
-// Spokes deposit around cusp azimuths with an exponential kernel (Fig. 16 —
-// not a delta snap); at the lowest loads emission goes discontinuous and a
-// fraction scatters off-line (disjointed dotted trails). Arcs quantize onto
-// stick-slip rest radii. Dots stay near where they were picked up.
-export function settleInterior({ items, total, cusps, tEnd, rng, forceSink = null }) {
+// Spokes deposit around the live cusp azimuths with an exponential kernel
+// (Fig. 16 — not a delta snap); at the lowest loads emission goes
+// discontinuous and a fraction scatters off-line (disjointed dotted trails).
+// Arcs quantize onto stick-slip rest radii. Dots stay near where they were
+// picked up. Every deposit carries its sink so the render can weight
+// structure over speckle.
+export function settleInterior({
+  items,
+  total,
+  tEnd,
+  rng,
+  forceSink = null,
+  cuspSpacing = 0.06,
+  cuspWander = 0.5,
+}) {
   const sorted = [...items].sort((a, b) => b.rho - a.rho);
-  const deposits = [];
+  if (sorted.length === 0) return { deposits: [], cuspLevels: [] };
   const arcSpacing = 0.05 + 0.04 * rng.random();
-  const cuspSpacing = cusps.length ? TWO_PI / cusps.length : TWO_PI;
-  const lambda = cuspSpacing * 0.12;
+  const rho0 = Math.max(sorted[0].rho, 0.1);
+  const cuspLevels = traceCuspFront({ rho0, spacing: cuspSpacing, wander: cuspWander, rng });
+  const levelAt = (rho) => {
+    const k = Math.min(
+      cuspLevels.length - 1,
+      Math.max(0, Math.round((rho0 - rho) / FRONT_STEP)),
+    );
+    return cuspLevels[k];
+  };
+  const deposits = [];
   let remaining = sorted.length;
   for (const p of sorted) {
     const load = remaining / total;
-    const sink = forceSink ?? chooseInteriorSink(load, rng);
-    if (sink === 'spoke' && cusps.length) {
-      let best = cusps[0];
+    // "The central region is composed of apparently disorganized dots"
+    // (Fig. 9): near the hub, cusp azimuths converge and organized emission
+    // breaks down — everything inside settles as dots.
+    const sink = forceSink ?? (p.rho < 0.08 ? 'dot' : chooseInteriorSink(load, rng));
+    if (sink === 'spoke') {
+      const { thetas } = levelAt(p.rho);
+      const spacingHere = TWO_PI / thetas.length;
+      let best = thetas[0];
       let bestOff = Infinity;
-      for (const c of cusps) {
-        let off = Math.abs(wrap(p.theta) - c);
+      for (const c of thetas) {
+        let off = Math.abs(wrap(p.theta) - wrap(c));
         if (off > Math.PI) off = TWO_PI - off;
         if (off < bestOff) {
           bestOff = off;
@@ -181,9 +256,9 @@ export function settleInterior({ items, total, cusps, tEnd, rng, forceSink = nul
       const sign = rng.random() < 0.5 ? -1 : 1;
       const offset =
         load < 0.03 && rng.random() < 0.55
-          ? sign * rng.uniform(0.08, 0.5) * cuspSpacing
-          : sign * -lambda * Math.log(1 - rng.random());
-      deposits.push({ rho: p.rho, theta: best + offset, t: tEnd, pinned: false });
+          ? sign * rng.uniform(0.08, 0.5) * spacingHere
+          : sign * -(spacingHere * 0.12) * Math.log(1 - rng.random());
+      deposits.push({ rho: p.rho, theta: best + offset, t: tEnd, pinned: false, sink });
     } else if (sink === 'arc') {
       const level = clamp01(Math.round(p.rho / arcSpacing) * arcSpacing + rng.gaussian() * 0.002);
       deposits.push({
@@ -191,6 +266,7 @@ export function settleInterior({ items, total, cusps, tEnd, rng, forceSink = nul
         theta: p.theta + rng.gaussian() * 0.01,
         t: tEnd,
         pinned: false,
+        sink,
       });
     } else {
       deposits.push({
@@ -198,11 +274,12 @@ export function settleInterior({ items, total, cusps, tEnd, rng, forceSink = nul
         theta: p.theta + rng.gaussian() * 0.02,
         t: tEnd,
         pinned: false,
+        sink,
       });
     }
     remaining--;
   }
-  return deposits;
+  return { deposits, cuspLevels };
 }
 
 // Advect solute particles through the Deegan flow with Brownian diffusion.
@@ -301,17 +378,22 @@ export function makeDropStepper({
         arrestDepth: forced.arrestDepth,
         tNucleated: t,
         growthRate: forced.arrestDepth / 0.03,
+        generation: 0,
       });
     } else {
       const arcOverR = holeAngularWidth(epoch.phiEff);
       const halfWidth = ((arcOverR / epoch.base) / 2) * rng.uniform(0.7, 1.3);
-      const arrestDepth = 0.8 * halfWidth * epoch.base * rng.uniform(0.75, 1.25);
+      // Depth ≈ width·1.3: Fig. 9's cells measure round-to-tall (equivalent
+      // diameter ≈ the Fig. 13 arc length), not the shallow scallops a
+      // semicircular cap would leave. Width stays the calibrated law.
+      const arrestDepth = 1.3 * halfWidth * epoch.base * rng.uniform(0.75, 1.25);
       epoch.holes.push({
         theta: holeAzimuth(),
         halfWidth,
         arrestDepth,
         tNucleated: t,
         growthRate: arrestDepth / (0.03 * rng.uniform(0.7, 1.3)),
+        generation: 0,
       });
     }
     if (epoch.tOnset === null) {
@@ -322,6 +404,37 @@ export function makeDropStepper({
       const expectedHoles = TWO_PI / (holeAngularWidth(epoch.phiEff) / epoch.base);
       epoch.nucleationGap = (0.6 * (1 - t)) / Math.max(1, expectedHoles);
       epoch.nextNucleation = t + epoch.nucleationGap * rng.uniform(0.5, 1.5);
+    }
+  };
+
+  // Recursive depinning (Fig. 11: large arches are composed of subarches):
+  // an arrested arch is itself a pinned contact line, so the next generation
+  // of holes nucleates on it — sized by the same Fig. 13 arch-length law at
+  // the receded local radius and nested inside the parent's window. A child's
+  // depth is stored from the epoch base so the kappa-bin union composes
+  // unchanged; its growth therefore spends its early life "re-drying" the
+  // parent's hole, and that dead time is the nucleation delay.
+  const spawnChildren = (parent, t) => {
+    const localR = epoch.base - parent.arrestDepth;
+    if (localR < 0.15) return;
+    const count = 1 + rng.int(2);
+    for (let k = 0; k < count; k++) {
+      const halfWidth = Math.min(
+        (holeAngularWidth(phiEffAt(t)) / localR / 2) * rng.uniform(0.7, 1.3),
+        parent.halfWidth * 0.95,
+      );
+      const off = rng.uniform(-1, 1) * (parent.halfWidth - halfWidth);
+      // Parent floor under the child's centre (the cos² edge profile).
+      const edge = Math.cos((Math.PI / 2) * (Math.abs(off) / parent.halfWidth));
+      const ownDepth = 1.3 * halfWidth * localR * rng.uniform(0.75, 1.25);
+      epoch.holes.push({
+        theta: parent.theta + off,
+        halfWidth,
+        arrestDepth: parent.arrestDepth * edge * edge + ownDepth,
+        tNucleated: t,
+        growthRate: ownDepth / (0.03 * rng.uniform(0.7, 1.3)),
+        generation: parent.generation + 1,
+      });
     }
   };
 
@@ -338,6 +451,7 @@ export function makeDropStepper({
         halfWidth: h.halfWidth,
         arrestDepth: h.arrestDepth,
         tNucleated: h.tNucleated,
+        generation: h.generation,
       })),
     });
   };
@@ -378,7 +492,24 @@ export function makeDropStepper({
       }
     }
 
+    // Arrested arches host the next generation (bounded recursion). Snapshot
+    // the length: children pushed here arrest later, not this step.
+    const grown = epoch.holes.length;
+    for (let h = 0; h < grown; h++) {
+      const hole = epoch.holes[h];
+      if (hole.generation >= MAX_ARCH_GENERATION || hole.spawned) continue;
+      if (t >= hole.tNucleated + hole.arrestDepth / hole.growthRate) {
+        hole.spawned = true;
+        spawnChildren(hole, t);
+      }
+    }
+
     const kappaBins = buildKappaBins(epoch.base, epoch.holes, t);
+    // Arrest contour (holes at full depth): a particle caught by a growing
+    // hole rides the receding front and jams where the front will arrest —
+    // the snowplow that makes arch walls bright and cell interiors dark.
+    // Passing t = ∞ rasterizes every hole at its arrestDepth.
+    const floorBins = buildKappaBins(epoch.base, epoch.holes, Infinity);
 
     // Severing: union of grown holes covers enough of the circumference.
     if (epoch.holes.length > 0) {
@@ -419,7 +550,13 @@ export function makeDropStepper({
       const bin = Math.floor((wrap(theta[i]) / TWO_PI) * NBINS);
       const kb = kappaBins[bin];
       const interface_ = kb * (1 - w);
-      let r = rho[i] + radialVelocity(rho[i] / kb, t) * kb * dt + sigma * rng.gaussian();
+      // The D/rho term is the Itô drift of 2-D Brownian motion's radial
+      // coordinate; without it the walk is 1-D-in-rho and piles a 1/r
+      // density spike at the centre (the old render hid it with centerFade).
+      let r =
+        rho[i] +
+        (radialVelocity(rho[i] / kb, t) * kb + diffusion / Math.max(rho[i], 0.02)) * dt +
+        sigma * rng.gaussian();
       theta[i] += (sigma / Math.max(r, 0.05)) * rng.gaussian();
       if (r < 0) {
         r = -r;
@@ -434,12 +571,13 @@ export function makeDropStepper({
         // release the moderate arcs that carry most of the rim and bleach
         // the ring wholesale.
         if (!pinningAt || t < pinningAt(theta[i]) * tEnd) {
-          // Jammed at the growing solid-liquid interface.
+          // Jammed at the growing solid-liquid interface — on the arrest
+          // contour where a hole is still deepening (the snowplow).
           alive[i] = 0;
           aliveCount--;
           depositMass[bin]++;
           deposits.push({
-            rho: Math.max(0, interface_ - Math.abs(rng.gaussian()) * GRAIN),
+            rho: Math.max(0, floorBins[bin] * (1 - w) - Math.abs(rng.gaussian()) * GRAIN),
             theta: theta[i],
             t,
             pinned: true,
@@ -474,14 +612,20 @@ export function makeDropStepper({
       if (alive[i]) leftovers.push({ rho: rho[i], theta: theta[i] });
     }
     if (sweeping) {
-      const n = 18 + rng.int(13);
-      const cuspOffset = rng.uniform(0, TWO_PI / n);
-      const cusps = Array.from({ length: n }, (_, k) => cuspOffset + (k / n) * TWO_PI);
       deposits.push(
-        ...settleInterior({ items: leftovers, total: particles, cusps, tEnd, rng, forceSink: interiorSink }),
+        ...settleInterior({
+          items: leftovers,
+          total: particles,
+          tEnd,
+          rng,
+          forceSink: interiorSink,
+          cuspSpacing: 0.05 + 0.02 * rng.random(),
+        }).deposits,
       );
     } else {
-      for (const p of leftovers) deposits.push({ rho: p.rho, theta: p.theta, t: tEnd, pinned: false });
+      for (const p of leftovers) {
+        deposits.push({ rho: p.rho, theta: p.theta, t: tEnd, pinned: false, sink: 'residue' });
+      }
     }
   };
 

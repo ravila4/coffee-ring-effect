@@ -105,6 +105,22 @@ export function speckCutoff(phi) {
   return 0.004 / Math.sqrt(phi);
 }
 
+// How a deposit paints depends on what it is. Jammed rim/arch mass is
+// darkest and sharpest; organized recession structure (spokes, arcs) stays
+// small and dark enough to read as lines; dots and in-place residue blur
+// into the pale interior speckle. Deegan's grey level is particle count —
+// structure exists in the deposit data, and a flat mapping buries it.
+const SPLAT_STYLES = {
+  pinned: { r: 1, aLo: 0.06, aHi: 0.13 },
+  spoke: { r: 0.85, aLo: 0.055, aHi: 0.1 },
+  arc: { r: 0.85, aLo: 0.055, aHi: 0.1 },
+  dot: { r: 1.3, aLo: 0.018, aHi: 0.042 },
+  residue: { r: 1.3, aLo: 0.018, aHi: 0.042 },
+};
+export function splatStyleFor(deposit) {
+  return SPLAT_STYLES[deposit.pinned ? 'pinned' : (deposit.sink ?? 'residue')];
+}
+
 export function buildStain({
   seed,
   radius = 140,
@@ -204,15 +220,15 @@ export function buildStain({
         });
   };
 
-  const pushSplat = (x, y, residue, shade, centerFade = 1) => {
+  const pushSplat = (x, y, deposit, shade) => {
+    const style = splatStyleFor(deposit);
     splats.push({
       x,
       y,
-      // Residue splats stay near grain size: the recession pass organizes
-      // them into spokes/arcs, and oversized blurry blobs would erase that
-      // structure into a wash.
-      r: splatBase * rng.uniform(0.6, 1.4) * (residue ? 1.3 : 1),
-      alpha: residue ? rng.uniform(0.018, 0.042) * centerFade : rng.uniform(0.06, 0.13) * shade,
+      r: splatBase * rng.uniform(0.6, 1.4) * style.r,
+      // Azimuthal shade belongs to the contact line, so it only modulates
+      // jammed deposits; interior structure paints flat.
+      alpha: rng.uniform(style.aLo, style.aHi) * (deposit.pinned ? shade : 1),
       color: RING_COLORS[rng.int(RING_COLORS.length)],
     });
   };
@@ -249,16 +265,9 @@ export function buildStain({
     });
     for (const d of deposits) {
       const rr = d.rho * line.radiusAt(d.theta);
-      // Soft-pedal the pile-up at the very center so it reads as a faint
-      // last-pool deposit rather than a bullseye.
-      const centerFade = 0.4 + 0.6 * Math.min(1, d.rho / 0.3);
-      pushSplat(
-        cx + rr * Math.cos(d.theta),
-        cy + rr * Math.sin(d.theta),
-        !d.pinned,
-        shadeAt(d.theta),
-        centerFade,
-      );
+      // No centerFade: the bullseye it papered over was the 1-D radial
+      // walk's 1/r pile-up, fixed in the sim itself.
+      pushSplat(cx + rr * Math.cos(d.theta), cy + rr * Math.sin(d.theta), d, shadeAt(d.theta));
     }
   };
 
@@ -323,7 +332,7 @@ export function buildStain({
       const out = outerR(d.theta);
       const inn = innerR(d.theta);
       const rr = (out + inn) / 2 + (d.u * (out - inn)) / 2;
-      pushSplat(cx + rr * Math.cos(d.theta), cy + rr * Math.sin(d.theta), !d.pinned, shadeAt(d.theta));
+      pushSplat(cx + rr * Math.cos(d.theta), cy + rr * Math.sin(d.theta), d, shadeAt(d.theta));
     }
   };
 
@@ -440,11 +449,31 @@ export function buildStain({
   return { splats, washes, radius, seed, type: stainType, splashEnergy: We, splashDir, fingerAzimuths };
 }
 
-export function paintStain(ctx, stain, { cx = 0, cy = 0 } = {}) {
+export function paintStain(ctx, stain, { cx = 0, cy = 0, darkField = false } = {}) {
   const trace = (pts) => {
     pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
     ctx.closePath();
   };
+  if (darkField) {
+    // Debug view matching Deegan's binarized dark-field photographs (PRE 61
+    // Fig. 9): deposit scatters light → white, bare substrate → black. No
+    // washes, no pigment palette, dots near grain scale — the structural
+    // skeleton (arch fences, veins, arcs) without the aesthetic blur on top.
+    ctx.save();
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    ctx.translate(cx, cy);
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    for (const s of stain.splats) {
+      ctx.beginPath();
+      // 0.25 × splat base ≈ the sim's deposit-grain scale (GRAIN·R): fence
+      // walls and veins stay resolvable instead of smearing into blobs.
+      ctx.arc(s.x, s.y, Math.max(0.55, s.r * 0.25), 0, 2 * Math.PI);
+      ctx.fill();
+    }
+    ctx.restore();
+    return;
+  }
   ctx.save();
   ctx.translate(cx, cy);
   ctx.globalCompositeOperation = 'multiply';
@@ -469,6 +498,7 @@ export function generateStainCanvas({
   seed,
   canvas,
   radiusFraction = DEFAULT_RADIUS_FRACTION,
+  darkField = false,
   ...options
 } = {}) {
   const c =
@@ -484,6 +514,6 @@ export function generateStainCanvas({
     canvasBound: 0.5 / radiusFraction,
     ...options,
   });
-  paintStain(c.getContext('2d'), stain, { cx: size / 2, cy: size / 2 });
+  paintStain(c.getContext('2d'), stain, { cx: size / 2, cy: size / 2, darkField });
   return { canvas: c, stain };
 }

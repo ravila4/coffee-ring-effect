@@ -266,6 +266,70 @@ test('mass is conserved with a pinning gate', () => {
   assert.equal(deposits.length, 800);
 });
 
+test('gap edges taper: deposit density falls gradually across a pinning ramp', () => {
+  // Strength ramps 1 → 0 over [π, 1.5π]. A marginal arc holds early and
+  // tears free late, so its deposit is the partial-time ring — the gap edge
+  // must fade out, not step.
+  const ramp = (theta) => {
+    const th = normalizeTheta(theta);
+    if (th < Math.PI) return 1;
+    if (th < 1.5 * Math.PI) return 1 - (th - Math.PI) / (0.5 * Math.PI);
+    return 0;
+  };
+  const { deposits } = simulateDrop({
+    particles: 6000,
+    phi: 0.01,
+    depinSchedule: [],
+    pinningAt: ramp,
+    rng: makeRng(114),
+  });
+  const pinned = deposits.filter((d) => d.pinned);
+  const binWidth = (0.5 * Math.PI) / 5;
+  const rampBins = new Array(5).fill(0);
+  let strong = 0;
+  for (const d of pinned) {
+    const th = normalizeTheta(d.theta);
+    if (th >= 0.2 * Math.PI && th < 0.8 * Math.PI) strong++;
+    if (th >= Math.PI && th < 1.5 * Math.PI) rampBins[Math.floor((th - Math.PI) / binWidth)]++;
+  }
+  const strongPerBin = strong / ((0.6 * Math.PI) / binWidth);
+  assert.ok(strongPerBin > 50, `too few deposits to judge: ${strongPerBin}/bin`);
+  assert.ok(
+    rampBins[0] > rampBins[2] && rampBins[2] > rampBins[4],
+    `ramp not monotone: ${rampBins}`,
+  );
+  // Mid-ramp stays fairly high (~0.8): displaced gap mass sloshes onto the
+  // still-holding arcs and inflates the strong half of the transition. The
+  // taper lives in the weak half; the coin-flip gate put ~1.0 here and rose
+  // toward the gap.
+  const mid = rampBins[2] / strongPerBin;
+  assert.ok(mid > 0.05 && mid < 0.92, `mid-ramp density ${mid.toFixed(2)} of full: not a taper`);
+});
+
+test('a marginal arc only collects deposits from before its release time', () => {
+  // The temporal signature that distinguishes a taper from a thinned coin
+  // flip: where strength is ~0.1–0.4, everything deposited must date from
+  // the early fraction of the drying — no late arrivals stick there.
+  const ramp = (theta) => {
+    const th = normalizeTheta(theta);
+    if (th < Math.PI) return 1;
+    if (th < 1.5 * Math.PI) return 1 - (th - Math.PI) / (0.5 * Math.PI);
+    return 0;
+  };
+  const { deposits } = simulateDrop({
+    particles: 6000,
+    phi: 0.01,
+    depinSchedule: [],
+    pinningAt: ramp,
+    rng: makeRng(114),
+  });
+  const late = deposits.filter((d) => {
+    const th = normalizeTheta(d.theta);
+    return d.pinned && th >= 1.3 * Math.PI && th < 1.45 * Math.PI && d.t > 0.45;
+  });
+  assert.equal(late.length, 0, `${late.length} late deposits on a weak arc`);
+});
+
 // --- interior recession pass: arcs, spokes, dots ---
 
 test('interior sink weights shift arc → spoke → dot as the load depletes', () => {

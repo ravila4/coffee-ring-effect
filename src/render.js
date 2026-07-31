@@ -175,8 +175,10 @@ export function buildStain({
         );
   const fingerCount = fingerAzimuths.length;
 
-  // Weak-pinning arcs where the contact line recedes instead of jamming —
-  // this is what turns a full ring into a C-shape or leaves random gaps.
+  // Weak-pinning arcs where the contact line lets go partway through the
+  // drying instead of jamming to the end — this is what turns a full ring
+  // into a C-shape or leaves gaps. The sim reads strength as a hold
+  // fraction, so gap edges fade out instead of stepping.
   const makePinning = () => {
     const gateOffset = rng.uniform(300, 400);
     const threshold = rng.uniform(-0.05, 0.35);

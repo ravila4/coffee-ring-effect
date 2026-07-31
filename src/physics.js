@@ -225,7 +225,7 @@ export function simulateDrop({
   depinSchedule = null,
   holeSchedule = null,
   interiorSink = null, // test-only: force the recession-pass sink
-  pinningAt = null, // θ → [0,1] pinning strength; weak arcs leave ring gaps
+  pinningAt = null, // θ → [0,1] strength, read as hold fraction of the drying
   rng,
 } = {}) {
   if (!rng) throw new Error('simulateDrop requires a seeded rng');
@@ -415,7 +415,14 @@ export function simulateDrop({
         theta[i] += Math.PI;
       }
       if (r >= interface_) {
-        if (!pinningAt || rng.random() < pinningAt(theta[i])) {
+        // Pinning is temporal, not a coin flip: an arc holds until the
+        // depinning pull (growing as the drop thins) exceeds its strength,
+        // so strength reads as a hold time and weak arcs keep only the thin
+        // early-time ring — gap edges taper instead of stepping. Strength
+        // maps to hold time linearly: steeper maps (strength², A/B-tested)
+        // release the moderate arcs that carry most of the rim and bleach
+        // the ring wholesale.
+        if (!pinningAt || t < pinningAt(theta[i]) * tEnd) {
           // Jammed at the growing solid-liquid interface.
           alive[i] = 0;
           aliveCount--;
@@ -466,9 +473,10 @@ export function simulateDrop({
 }
 
 // Supply profile for a rim drip: finite volume wicking both ways along the
-// cup-rim/table channel. Compact support with a smooth maximum at the drip
-// (finite-volume corner spreading — a Barenblatt-type similarity profile, not
-// Washburn's infinite-reservoir law, and not linear-in-s, which would cusp):
+// channel between the cup rim and the surface. Compact support with a smooth
+// maximum at the drip (finite-volume corner spreading — a Barenblatt-type
+// similarity profile, not Washburn's infinite-reservoir law, and not
+// linear-in-s, which would cusp):
 // m(θ) = max(0, 1 − (s/L)²)^γ with s the arc distance from the origin.
 // The sampler normalizes total mass automatically (every particle lands in
 // the wetted arc), so a shorter reach concentrates the same volume — thicker,
@@ -554,7 +562,8 @@ export function simulateRing({
       const v = u[i] + dir * radialVelocity(Math.abs(u[i]), t) * dt + sigma * rng.gaussian();
       theta[i] += sigma * 0.3 * rng.gaussian();
       if (Math.abs(v) >= 1) {
-        if (!pinningAt || rng.random() < pinningAt(theta[i])) {
+        // Same temporal gate as the sessile drop: strength = hold fraction.
+        if (!pinningAt || t < pinningAt(theta[i]) * tEnd) {
           alive[i] = 0;
           deposits.push({
             u: Math.sign(v) * (1 - Math.abs(rng.gaussian()) * ringWidth),

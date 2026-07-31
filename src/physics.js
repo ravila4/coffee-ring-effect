@@ -4,6 +4,62 @@
 // We integrate that flow field directly instead of solving fluid dynamics.
 
 const LAMBDA = 0.5; // evaporation-flux exponent for a vanishing contact angle
+const PACKING = 0.656; // ring packing fraction p (Deegan Appendix)
+
+// Deegan's Eq. 3 (wedge approximation): w/R as a function of concentration and
+// normalized time. The Appendix ODE reduces to this as τ → 0.
+export function eq3Width(phi, tau) {
+  return Math.sqrt(phi / (4 * PACKING)) * Math.pow(1 - Math.pow(1 - tau, 0.75), 2 / 3);
+}
+
+// First-hole depinning time, Fig. 4(b) measured power law. The retraction
+// mechanism itself is unsolved (Deegan's words), so the timing is empirical:
+// no local criterion reproduces the weak 0.26 exponent — a surface-angle
+// threshold moves the wrong way with φ, and force balances give φ^1.5.
+export function depinOnset(phi) {
+  return 2.41 * Math.pow(phi, 0.26);
+}
+
+// Appendix ODE pair (A6)/(A7) in epoch-normalized variables x = 4w/R,
+// y = 4h/(θ·R), τ ∈ [0,1):  y·dx/dτ = S(τ),  dy/dτ = (1−τ−y)·dx/dτ,
+// with source S(τ) = (2φ/p)·(1−(1−τ)^(3/4))^(1/3)/(1−τ)^(1/4).
+// The IC x = y = 0 is singular (dx/dτ ~ τ^(−1/3)), so the first step seeds
+// from the small-τ asymptote x = y = 2√(φ/p)·(3τ/4)^(2/3), which is exactly
+// Eq. 3's wedge limit. Forward Euler after that is within 0.6% of RK4.
+// The epoch ends when 1−τ−y ≤ 0: the ring has met the liquid surface and Θ
+// would go negative on the next step.
+export function makeRingGrowth({ phi }) {
+  let tau = 0;
+  let x = 0;
+  let y = 0;
+  let started = false;
+  let done = false;
+  return {
+    get tau() { return tau; },
+    get x() { return x; },
+    get y() { return y; },
+    get w() { return x / 4; },
+    get thetaRatio() { return 1 - tau - y; },
+    get done() { return done; },
+    step(dtau) {
+      if (done) return;
+      if (!started) {
+        tau = dtau;
+        x = y = 2 * Math.sqrt(phi / PACKING) * Math.pow(0.75 * tau, 2 / 3);
+        started = true;
+        return;
+      }
+      const S =
+        ((2 * phi) / PACKING) *
+        (Math.pow(1 - Math.pow(1 - tau, 0.75), 1 / 3) / Math.pow(1 - tau, 0.25));
+      const dxdtau = S / y;
+      x = Math.min(x + dxdtau * dtau, 3.999); // interface radius stays positive
+      y += (1 - tau - y) * dxdtau * dtau;
+      tau += dtau;
+      if (1 - tau - y <= 0 || tau >= 1) done = true;
+    },
+  };
+}
 
 // Depth-averaged outward radial velocity in normalized units (drop radius = 1,
 // drying time = 1): v(ρ,t) = [ (1−ρ²)^(−λ) − (1−ρ²) ] / (4ρ(1−t)).
@@ -15,37 +71,166 @@ export function radialVelocity(rho, t) {
   return (Math.pow(one, -LAMBDA) - one) / (4 * (1 - t) * clamped);
 }
 
+const NBINS = 512; // azimuthal contact-line bins; oversamples 0.02-0.07 rad holes
+const GRAIN = 0.004; // deposit jitter at the interface, a few grain diameters
+const SEVER_COVERAGE = 0.63; // N·⟨L⟩ ~ C (paper) → 1−e⁻¹ union coverage
+const TWO_PI = 2 * Math.PI;
+
+const wrap = (theta) => ((theta % TWO_PI) + TWO_PI) % TWO_PI;
+
+// Arch arc length over drop radius, Fig. 13's linear law, floored where the
+// law crosses zero (φ ≈ 0.029, inside the render range). The naive jamming
+// argument gives 1/φ, which the paper's data reject.
+export function holeAngularWidth(phiEff) {
+  return Math.max(0.015, 0.069 - 2.38 * phiEff);
+}
+
+// Contact line as azimuthal bins: base radius minus hole bumps. Holes compose
+// by max recession (union of dry regions) — summing would double-recede.
+export function buildKappaBins(base, holes, t, nBins = NBINS) {
+  const bins = new Float64Array(nBins).fill(base);
+  for (const h of holes) {
+    const depth = Math.min(h.arrestDepth, Math.max(0, (t - h.tNucleated) * h.growthRate));
+    if (depth <= 0) continue;
+    const center = wrap(h.theta);
+    const centerBin = Math.floor((center / TWO_PI) * nBins);
+    const halfBins = Math.ceil((h.halfWidth / TWO_PI) * nBins) + 1;
+    for (let db = -halfBins; db <= halfBins; db++) {
+      const b = (((centerBin + db) % nBins) + nBins) % nBins;
+      const thetaB = ((b + 0.5) / nBins) * TWO_PI;
+      let off = Math.abs(thetaB - center);
+      if (off > Math.PI) off = TWO_PI - off;
+      if (off >= h.halfWidth) continue;
+      const edge = Math.cos((Math.PI / 2) * (off / h.halfWidth));
+      const kappa = base - depth * edge * edge;
+      if (kappa < bins[b]) bins[b] = kappa;
+    }
+  }
+  return bins;
+}
+
+// Sample a bin index by cumulative weight. Used for hole-azimuth selection,
+// weighted toward thin realized deposit.
+export function pickWeightedBin(weights, rng) {
+  let total = 0;
+  for (const w of weights) total += w;
+  let target = rng.random() * total;
+  for (let b = 0; b < weights.length; b++) {
+    target -= weights[b];
+    if (target <= 0) return b;
+  }
+  return weights.length - 1;
+}
+
+// Below this effective concentration there are too few particles to arrest a
+// growing hole ("insufficient number of particles to stop the contact line"),
+// so the severed line never re-pins: the drop ends in free recession and the
+// interior settles through the recession pass instead of in place.
+const FREE_RECESSION_PHI = 0.0013;
+
+const clamp01 = (v) => Math.min(1, Math.max(0, v));
+
+const smoothstepLocal = (e0, e1, v) => {
+  const t = clamp01((v - e0) / (e1 - e0));
+  return t * t * (3 - 2 * t);
+};
+
+// Which sink an interior particle settles through, as a function of the live
+// remaining load (suspended fraction of all particles) at its pickup moment.
+// High load: the receding line is overwhelmed and erratic — half-formed
+// arches. Mid load: organized cusp emission — radial spokes (with arcs it
+// forms the gridlike interior). Near-zero load: disorganized dots. Weights
+// ramp smoothly so the mixed zone is a genuine mixture.
+export function chooseInteriorSink(load, rng) {
+  const arcW = smoothstepLocal(0.06, 0.2, load);
+  const dotW = 1 - smoothstepLocal(0.008, 0.04, load);
+  const spokeW = Math.max(0, 1 - arcW - dotW);
+  let pick = rng.random() * (arcW + dotW + spokeW);
+  if ((pick -= arcW) <= 0) return 'arc';
+  if ((pick -= spokeW) <= 0) return 'spoke';
+  return 'dot';
+}
+
+// The recession pass: the freed contact line sweeps the interior outside-in,
+// settling each still-suspended particle through a load-dependent sink.
+// Spokes deposit around cusp azimuths with an exponential kernel (Fig. 16 —
+// not a delta snap); at the lowest loads emission goes discontinuous and a
+// fraction scatters off-line (disjointed dotted trails). Arcs quantize onto
+// stick-slip rest radii. Dots stay near where they were picked up.
+export function settleInterior({ items, total, cusps, tEnd, rng, forceSink = null }) {
+  const sorted = [...items].sort((a, b) => b.rho - a.rho);
+  const deposits = [];
+  const arcSpacing = 0.05 + 0.04 * rng.random();
+  const cuspSpacing = cusps.length ? TWO_PI / cusps.length : TWO_PI;
+  const lambda = cuspSpacing * 0.12;
+  let remaining = sorted.length;
+  for (const p of sorted) {
+    const load = remaining / total;
+    const sink = forceSink ?? chooseInteriorSink(load, rng);
+    if (sink === 'spoke' && cusps.length) {
+      let best = cusps[0];
+      let bestOff = Infinity;
+      for (const c of cusps) {
+        let off = Math.abs(wrap(p.theta) - c);
+        if (off > Math.PI) off = TWO_PI - off;
+        if (off < bestOff) {
+          bestOff = off;
+          best = c;
+        }
+      }
+      const sign = rng.random() < 0.5 ? -1 : 1;
+      const offset =
+        load < 0.03 && rng.random() < 0.55
+          ? sign * rng.uniform(0.08, 0.5) * cuspSpacing
+          : sign * -lambda * Math.log(1 - rng.random());
+      deposits.push({ rho: p.rho, theta: best + offset, t: tEnd, pinned: false });
+    } else if (sink === 'arc') {
+      const level = clamp01(Math.round(p.rho / arcSpacing) * arcSpacing + rng.gaussian() * 0.002);
+      deposits.push({
+        rho: level,
+        theta: p.theta + rng.gaussian() * 0.01,
+        t: tEnd,
+        pinned: false,
+      });
+    } else {
+      deposits.push({
+        rho: p.rho * (0.98 + 0.02 * rng.random()),
+        theta: p.theta + rng.gaussian() * 0.02,
+        t: tEnd,
+        pinned: false,
+      });
+    }
+    remaining--;
+  }
+  return deposits;
+}
+
 // Advect solute particles through the Deegan flow with Brownian diffusion.
-// Particles deposit when they reach the pinned contact line; stick-slip
-// depinning events pull the line inward, leaving secondary rings; whatever is
-// still suspended at dry-out deposits in place (the mottled interior residue).
+// The ring grows inward per the Appendix ODE; depinning begins at the
+// measured onset time as dry holes nucleating on the ring's inner edge
+// (Fig. 3), which grow, arrest (walled in by jamming particles → arch
+// loops), and — once their union covers ~63% of the circumference — sever
+// the liquid from the ring, starting the next pinned epoch. Whatever is
+// still suspended at dry-out deposits in place (the mottled interior).
+//
+// depinSchedule ([{t}], forces depin onsets) and holeSchedule ([{t, theta,
+// halfWidth, arrestDepth}], forces individual holes) exist for deterministic
+// tests; both drive the identical epoch machinery.
 export function simulateDrop({
   particles = 3000,
   steps = 300,
   tEnd = 0.98,
   diffusion = 0.02,
-  ringWidth = 0.015,
-  depinEvents = 0,
-  depinJump = [0.04, 0.1],
-  depinWindow = [0.35, 0.85],
+  phi = 0.01,
   depinSchedule = null,
+  holeSchedule = null,
+  interiorSink = null, // test-only: force the recession-pass sink
   pinningAt = null, // θ → [0,1] pinning strength; weak arcs leave ring gaps
   rng,
 } = {}) {
   if (!rng) throw new Error('simulateDrop requires a seeded rng');
 
-  let schedule = depinSchedule;
-  if (!schedule) {
-    schedule = [];
-    for (let k = 0; k < depinEvents; k++) {
-      schedule.push({
-        t: rng.uniform(depinWindow[0], depinWindow[1]),
-        jump: rng.uniform(depinJump[0], depinJump[1]),
-      });
-    }
-  }
-  schedule = [...schedule].sort((a, b) => a.t - b.t);
-
+  const dt = tEnd / steps;
   const rho = new Float64Array(particles);
   const theta = new Float64Array(particles);
   const alive = new Uint8Array(particles).fill(1);
@@ -53,42 +238,199 @@ export function simulateDrop({
     rho[i] = Math.sqrt(rng.random()); // uniform over the disk
     theta[i] = rng.uniform(0, 2 * Math.PI);
   }
+  let aliveCount = particles;
 
   const deposits = [];
-  let kappa = 1; // current pinned contact-line position
-  let nextEvent = 0;
-  const dt = tEnd / steps;
+  const events = [];
+  const depositMass = new Float64Array(NBINS);
+
+  const forcedDepins = depinSchedule ? [...depinSchedule].sort((a, b) => a.t - b.t) : null;
+  let nextForcedDepin = 0;
+  const forcedHoles = holeSchedule ? [...holeSchedule].sort((a, b) => a.t - b.t) : null;
+  let nextForcedHole = 0;
+
+  const phiEffAt = (tStart) =>
+    Math.min(PACKING, (phi * (aliveCount / particles)) / (1 - tStart));
+
+  const newEpoch = (base, tStart, thetaEpoch) => ({
+    base,
+    tStart,
+    thetaEpoch,
+    phiEff: phiEffAt(tStart),
+    growth: makeRingGrowth({ phi: phiEffAt(tStart) }),
+    holes: [],
+    tOnset: null,
+    wAtDepin: null,
+    nextNucleation: Infinity,
+    nucleationGap: Infinity,
+  });
+
+  let epoch = newEpoch(1, 0, 1);
+  let freeRecession = false;
+
+  const holeAzimuth = () => {
+    // Nucleate where the realized ring is thinnest ("the thinnest portion of
+    // the ring indicates where the first depinning event occurred"); before
+    // any deposit exists, fall back to the weak-pinning arcs.
+    const weights = new Float64Array(NBINS);
+    let anyMass = false;
+    for (let b = 0; b < NBINS; b++) if (depositMass[b] > 0) anyMass = true;
+    for (let b = 0; b < NBINS; b++) {
+      const thetaB = ((b + 0.5) / NBINS) * TWO_PI;
+      weights[b] = anyMass
+        ? 1 / (1 + depositMass[b])
+        : pinningAt
+          ? 1.01 - pinningAt(thetaB)
+          : 1;
+    }
+    const bin = pickWeightedBin(weights, rng);
+    return ((bin + rng.random()) / NBINS) * TWO_PI;
+  };
+
+  const nucleate = (t, forced) => {
+    if (forced) {
+      epoch.holes.push({
+        theta: forced.theta,
+        halfWidth: forced.halfWidth,
+        arrestDepth: forced.arrestDepth,
+        tNucleated: t,
+        growthRate: forced.arrestDepth / 0.03,
+      });
+    } else {
+      const arcOverR = holeAngularWidth(epoch.phiEff);
+      const halfWidth = ((arcOverR / epoch.base) / 2) * rng.uniform(0.7, 1.3);
+      const arrestDepth = 0.8 * halfWidth * epoch.base * rng.uniform(0.75, 1.25);
+      epoch.holes.push({
+        theta: holeAzimuth(),
+        halfWidth,
+        arrestDepth,
+        tNucleated: t,
+        growthRate: arrestDepth / (0.03 * rng.uniform(0.7, 1.3)),
+      });
+    }
+    if (epoch.tOnset === null) {
+      epoch.tOnset = t;
+      epoch.wAtDepin = epoch.growth.w;
+      // Spread the fence of holes over ~60% of the remaining drying time so
+      // the union crosses the severing threshold before dry-out.
+      const expectedHoles = TWO_PI / (holeAngularWidth(epoch.phiEff) / epoch.base);
+      epoch.nucleationGap = (0.6 * (1 - t)) / Math.max(1, expectedHoles);
+      epoch.nextNucleation = t + epoch.nucleationGap * rng.uniform(0.5, 1.5);
+    }
+  };
+
+  const recordEpoch = (rNext) => {
+    events.push({
+      tOnset: epoch.tOnset,
+      rBase: epoch.base,
+      rNext,
+      wAtDepin: epoch.wAtDepin,
+      wAtEnd: epoch.growth.w,
+      thetaEpoch: epoch.thetaEpoch,
+      holes: epoch.holes.map((h) => ({
+        theta: h.theta,
+        halfWidth: h.halfWidth,
+        arrestDepth: h.arrestDepth,
+        tNucleated: h.tNucleated,
+      })),
+    });
+  };
 
   for (let s = 0; s < steps; s++) {
     const t = s * dt;
-    while (nextEvent < schedule.length && schedule[nextEvent].t <= t) {
-      kappa = Math.max(0.2, kappa - schedule[nextEvent].jump);
-      nextEvent++;
+    epoch.growth.step(dt / (1 - epoch.tStart));
+    const w = epoch.growth.w;
+
+    // Depin onset: forced schedule bypasses the empirical law but drives the
+    // same machinery. An empty schedule means "never depins".
+    if (epoch.tOnset === null && !forcedHoles) {
+      if (forcedDepins) {
+        if (nextForcedDepin < forcedDepins.length && t >= forcedDepins[nextForcedDepin].t) {
+          nextForcedDepin++;
+          nucleate(t, null);
+        }
+      } else if (
+        epoch.growth.tau >= depinOnset(epoch.phiEff) ||
+        epoch.growth.done
+      ) {
+        nucleate(t, null);
+      }
     }
+    if (forcedHoles) {
+      while (nextForcedHole < forcedHoles.length && t >= forcedHoles[nextForcedHole].t) {
+        nucleate(t, forcedHoles[nextForcedHole]);
+        nextForcedHole++;
+      }
+    } else if (epoch.tOnset !== null) {
+      while (t >= epoch.nextNucleation) {
+        nucleate(t, null);
+        epoch.nextNucleation += epoch.nucleationGap * rng.uniform(0.5, 1.5);
+      }
+    }
+
+    const kappaBins = buildKappaBins(epoch.base, epoch.holes, t);
+
+    // Severing: union of grown holes covers enough of the circumference.
+    if (epoch.holes.length > 0) {
+      let covered = 0;
+      let floorSum = 0;
+      for (let b = 0; b < NBINS; b++) {
+        if (kappaBins[b] < epoch.base - 1e-6) {
+          covered++;
+          floorSum += kappaBins[b];
+        }
+      }
+      if (covered / NBINS >= SEVER_COVERAGE) {
+        // Severed liquid retracts freely (Fig. 2's post-depin shrink) before
+        // self-pinning re-establishes; the retreat distance is part of the
+        // unsolved dewetting-vs-pinning competition, so it stays stochastic.
+        // Without it the next epoch would pin at the hole floors, ~2% inside
+        // the old ring — nested rings would be invisible.
+        const retreat = epoch.base * rng.uniform(0.06, 0.14);
+        const rNext = Math.max(0.15, floorSum / covered - retreat);
+        recordEpoch(rNext);
+        if (phiEffAt(t) < FREE_RECESSION_PHI) {
+          // Too few particles left to arrest the next generation of holes:
+          // the line never re-pins. The interior settles via the recession
+          // pass after the loop.
+          freeRecession = true;
+          break;
+        }
+        const thetaEpoch = Math.min(1, (1 - t) / Math.pow(rNext, 3));
+        epoch = newEpoch(rNext, t, thetaEpoch);
+        continue; // rebuild bins next step under the new epoch
+      }
+    }
+
     const sigma = Math.sqrt(2 * diffusion * dt);
     for (let i = 0; i < particles; i++) {
       if (!alive[i]) continue;
-      let r = rho[i] + radialVelocity(rho[i] / kappa, t) * kappa * dt + sigma * rng.gaussian();
+      const bin = Math.floor((wrap(theta[i]) / TWO_PI) * NBINS);
+      const kb = kappaBins[bin];
+      const interface_ = kb * (1 - w);
+      let r = rho[i] + radialVelocity(rho[i] / kb, t) * kb * dt + sigma * rng.gaussian();
       theta[i] += (sigma / Math.max(r, 0.05)) * rng.gaussian();
       if (r < 0) {
         r = -r;
         theta[i] += Math.PI;
       }
-      if (r >= kappa) {
+      if (r >= interface_) {
         if (!pinningAt || rng.random() < pinningAt(theta[i])) {
-          // Jammed at the pinned line: sharp outer edge, short inward tail.
+          // Jammed at the growing solid-liquid interface.
           alive[i] = 0;
+          aliveCount--;
+          depositMass[bin]++;
           deposits.push({
-            rho: kappa - Math.abs(rng.gaussian()) * ringWidth,
+            rho: Math.max(0, interface_ - Math.abs(rng.gaussian()) * GRAIN),
             theta: theta[i],
             t,
             pinned: true,
           });
         } else {
-          // Locally receding line: the interface sweeps the particle back
-          // into the liquid, which sloshes it along the rim — mass migrates
-          // to pinned arcs instead of accumulating in the gap.
-          rho[i] = kappa * (1 - 0.02 - 0.05 * rng.random());
+          // Locally receding line: swept back into the liquid, measured
+          // inward from the interface (not the contact line — at high φ that
+          // would land inside the solid ring), sloshed along the rim.
+          rho[i] = interface_ * (1 - 0.02 - 0.05 * rng.random());
           theta[i] += rng.gaussian() * 0.3;
         }
       } else {
@@ -97,11 +439,82 @@ export function simulateDrop({
     }
   }
 
+  if (!freeRecession) recordEpoch(null);
+
+  // Interior settlement: if the liquid was still pinned at dry-out the
+  // residue stays where it was (the dense speckle of high-φ interiors); if
+  // the line was receding — free recession, or mid-depinning at tEnd — the
+  // sweep organizes it into arcs, spokes, and dots.
+  const sweeping = freeRecession || events[events.length - 1].tOnset !== null;
+  events[events.length - 1].interiorMode = sweeping ? 'recession' : 'pinned';
+  const leftovers = [];
   for (let i = 0; i < particles; i++) {
-    if (alive[i]) deposits.push({ rho: rho[i], theta: theta[i], t: tEnd, pinned: false });
+    if (alive[i]) leftovers.push({ rho: rho[i], theta: theta[i] });
+  }
+  if (sweeping) {
+    const n = 18 + rng.int(13);
+    const cuspOffset = rng.uniform(0, TWO_PI / n);
+    const cusps = Array.from({ length: n }, (_, k) => cuspOffset + (k / n) * TWO_PI);
+    deposits.push(
+      ...settleInterior({ items: leftovers, total: particles, cusps, tEnd, rng, forceSink: interiorSink }),
+    );
+  } else {
+    for (const p of leftovers) deposits.push({ rho: p.rho, theta: p.theta, t: tEnd, pinned: false });
   }
 
-  return { deposits };
+  return { deposits, events };
+}
+
+// Supply profile for a rim drip: finite volume wicking both ways along the
+// cup-rim/table channel. Compact support with a smooth maximum at the drip
+// (finite-volume corner spreading — a Barenblatt-type similarity profile, not
+// Washburn's infinite-reservoir law, and not linear-in-s, which would cusp):
+// m(θ) = max(0, 1 − (s/L)²)^γ with s the arc distance from the origin.
+// The sampler normalizes total mass automatically (every particle lands in
+// the wetted arc), so a shorter reach concentrates the same volume — thicker,
+// darker near the drip. relDensityAt is mass density relative to a uniform
+// ring; L ≫ π reads as uniform.
+export function makeSupplySampler({ originTheta = 0, arcHalfLength = Math.PI, falloff = 1 } = {}) {
+  const L = arcHalfLength;
+  const origin = wrap(originTheta);
+  const massAt = (theta) => {
+    let s = Math.abs(wrap(theta) - origin);
+    if (s > Math.PI) s = TWO_PI - s;
+    if (s >= L) return 0;
+    const u = 1 - (s / L) * (s / L);
+    return Math.pow(u, falloff);
+  };
+  const N = 512;
+  const span = Math.min(L, Math.PI);
+  const cdf = new Float64Array(N + 1);
+  for (let k = 0; k < N; k++) {
+    const theta = origin - span + ((k + 0.5) / N) * 2 * span;
+    cdf[k + 1] = cdf[k] + massAt(theta);
+  }
+  const total = cdf[N];
+  const integral = total * ((2 * span) / N);
+  const relDensityAt = (theta) => (massAt(theta) * TWO_PI) / integral;
+  const sample = (rng) => {
+    const target = rng.random() * total;
+    let lo = 0;
+    let hi = N - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (cdf[mid + 1] < target) lo = mid + 1;
+      else hi = mid;
+    }
+    const frac = (target - cdf[lo]) / (cdf[lo + 1] - cdf[lo] || 1);
+    return origin - span + ((lo + frac) / N) * 2 * span;
+  };
+  return { massAt, relDensityAt, sample, originTheta: origin, arcHalfLength };
+}
+
+// Band width from local supply density: V_r = πRw²θc, so deposited mass per
+// unit arc goes as w² and width as √density. Floored so the wash polygon
+// degenerates to a sliver (not a self-intersection) in the dry gap; capped so
+// crescent lobes stay plausible.
+export function widthFactor(relDensity) {
+  return Math.min(1.8, Math.max(0.04, Math.sqrt(relDensity)));
 }
 
 // A mug-bottom ring: liquid sits only in an annular band under the cup rim,
@@ -115,6 +528,7 @@ export function simulateRing({
   tEnd = 0.98,
   diffusion = 0.02,
   ringWidth = 0.05,
+  sampleTheta = null, // rng → θ; supply profile for crescents (default uniform)
   pinningAt = null,
   rng,
 } = {}) {
@@ -125,7 +539,7 @@ export function simulateRing({
   const alive = new Uint8Array(particles).fill(1);
   for (let i = 0; i < particles; i++) {
     u[i] = rng.uniform(-1, 1);
-    theta[i] = rng.uniform(0, 2 * Math.PI);
+    theta[i] = sampleTheta ? sampleTheta(rng) : rng.uniform(0, 2 * Math.PI);
   }
 
   const deposits = [];

@@ -152,27 +152,101 @@ export function chooseInteriorSink(load, rng) {
   return 'dot';
 }
 
+// The receding line organizes itself into a series of cusps that emit
+// particles (PRE 61 §IV). Cusp-to-cusp distance stays roughly constant in
+// arc length (~0.06·R; Figs. 13–14), so as the front's circumference
+// shrinks, cusps merge — seen outward, that's a vein Y-junction. Between
+// merges each cusp wanders, which is why real spokes wiggle. The evolution
+// is precomputed in radial slabs; spoke emission reads the live cusp set at
+// the particle's pickup radius.
+const FRONT_STEP = 0.02; // radial slab per cusp-evolution step
+export function traceCuspFront({ rho0, spacing, wander, rng }) {
+  let thetas = [];
+  const count0 = Math.max(3, Math.round((TWO_PI * rho0) / spacing));
+  const offset = rng.uniform(0, TWO_PI / count0);
+  for (let k = 0; k < count0; k++) {
+    thetas.push(offset + (k / count0) * TWO_PI + rng.gaussian() * 0.15 * (spacing / rho0));
+  }
+  const levels = [{ rho: rho0, thetas: [...thetas] }];
+  for (let rho = rho0 - FRONT_STEP; rho > 0; rho -= FRONT_STEP) {
+    const sigma = (wander * FRONT_STEP) / Math.max(rho, 0.12);
+    thetas = thetas.map((th) => th + rng.gaussian() * sigma).sort((a, b) => wrap(a) - wrap(b));
+    const target = Math.max(3, Math.round((TWO_PI * rho) / spacing));
+    while (thetas.length > target) {
+      // Merge the closest adjacent pair (circularly): the two veins join.
+      let best = 0;
+      let bestGap = Infinity;
+      for (let k = 0; k < thetas.length; k++) {
+        const next = thetas[(k + 1) % thetas.length];
+        let gap = Math.abs(wrap(next) - wrap(thetas[k]));
+        if (gap > Math.PI) gap = TWO_PI - gap;
+        if (gap < bestGap) {
+          bestGap = gap;
+          best = k;
+        }
+      }
+      const a = thetas[best];
+      const b = thetas[(best + 1) % thetas.length];
+      const mergedTheta = a + (circGapSigned(a, b) / 2);
+      thetas.splice(best, 1);
+      thetas[best % thetas.length] = mergedTheta;
+    }
+    levels.push({ rho, thetas: [...thetas] });
+  }
+  return levels;
+}
+
+const circGapSigned = (from, to) => {
+  let d = wrap(to) - wrap(from);
+  if (d > Math.PI) d -= TWO_PI;
+  if (d < -Math.PI) d += TWO_PI;
+  return d;
+};
+
 // The recession pass: the freed contact line sweeps the interior outside-in,
 // settling each still-suspended particle through a load-dependent sink.
-// Spokes deposit around cusp azimuths with an exponential kernel (Fig. 16 —
-// not a delta snap); at the lowest loads emission goes discontinuous and a
-// fraction scatters off-line (disjointed dotted trails). Arcs quantize onto
-// stick-slip rest radii. Dots stay near where they were picked up.
-export function settleInterior({ items, total, cusps, tEnd, rng, forceSink = null }) {
+// Spokes deposit around the live cusp azimuths with an exponential kernel
+// (Fig. 16 — not a delta snap); at the lowest loads emission goes
+// discontinuous and a fraction scatters off-line (disjointed dotted trails).
+// Arcs quantize onto stick-slip rest radii. Dots stay near where they were
+// picked up. Every deposit carries its sink so the render can weight
+// structure over speckle.
+export function settleInterior({
+  items,
+  total,
+  tEnd,
+  rng,
+  forceSink = null,
+  cuspSpacing = 0.06,
+  cuspWander = 0.5,
+}) {
   const sorted = [...items].sort((a, b) => b.rho - a.rho);
-  const deposits = [];
+  if (sorted.length === 0) return { deposits: [], cuspLevels: [] };
   const arcSpacing = 0.05 + 0.04 * rng.random();
-  const cuspSpacing = cusps.length ? TWO_PI / cusps.length : TWO_PI;
-  const lambda = cuspSpacing * 0.12;
+  const rho0 = Math.max(sorted[0].rho, 0.1);
+  const cuspLevels = traceCuspFront({ rho0, spacing: cuspSpacing, wander: cuspWander, rng });
+  const levelAt = (rho) => {
+    const k = Math.min(
+      cuspLevels.length - 1,
+      Math.max(0, Math.round((rho0 - rho) / FRONT_STEP)),
+    );
+    return cuspLevels[k];
+  };
+  const deposits = [];
   let remaining = sorted.length;
   for (const p of sorted) {
     const load = remaining / total;
-    const sink = forceSink ?? chooseInteriorSink(load, rng);
-    if (sink === 'spoke' && cusps.length) {
-      let best = cusps[0];
+    // "The central region is composed of apparently disorganized dots"
+    // (Fig. 9): near the hub, cusp azimuths converge and organized emission
+    // breaks down — everything inside settles as dots.
+    const sink = forceSink ?? (p.rho < 0.08 ? 'dot' : chooseInteriorSink(load, rng));
+    if (sink === 'spoke') {
+      const { thetas } = levelAt(p.rho);
+      const spacingHere = TWO_PI / thetas.length;
+      let best = thetas[0];
       let bestOff = Infinity;
-      for (const c of cusps) {
-        let off = Math.abs(wrap(p.theta) - c);
+      for (const c of thetas) {
+        let off = Math.abs(wrap(p.theta) - wrap(c));
         if (off > Math.PI) off = TWO_PI - off;
         if (off < bestOff) {
           bestOff = off;
@@ -182,9 +256,9 @@ export function settleInterior({ items, total, cusps, tEnd, rng, forceSink = nul
       const sign = rng.random() < 0.5 ? -1 : 1;
       const offset =
         load < 0.03 && rng.random() < 0.55
-          ? sign * rng.uniform(0.08, 0.5) * cuspSpacing
-          : sign * -lambda * Math.log(1 - rng.random());
-      deposits.push({ rho: p.rho, theta: best + offset, t: tEnd, pinned: false });
+          ? sign * rng.uniform(0.08, 0.5) * spacingHere
+          : sign * -(spacingHere * 0.12) * Math.log(1 - rng.random());
+      deposits.push({ rho: p.rho, theta: best + offset, t: tEnd, pinned: false, sink });
     } else if (sink === 'arc') {
       const level = clamp01(Math.round(p.rho / arcSpacing) * arcSpacing + rng.gaussian() * 0.002);
       deposits.push({
@@ -192,6 +266,7 @@ export function settleInterior({ items, total, cusps, tEnd, rng, forceSink = nul
         theta: p.theta + rng.gaussian() * 0.01,
         t: tEnd,
         pinned: false,
+        sink,
       });
     } else {
       deposits.push({
@@ -199,11 +274,12 @@ export function settleInterior({ items, total, cusps, tEnd, rng, forceSink = nul
         theta: p.theta + rng.gaussian() * 0.02,
         t: tEnd,
         pinned: false,
+        sink,
       });
     }
     remaining--;
   }
-  return deposits;
+  return { deposits, cuspLevels };
 }
 
 // Advect solute particles through the Deegan flow with Brownian diffusion.
@@ -460,7 +536,13 @@ export function simulateDrop({
       const bin = Math.floor((wrap(theta[i]) / TWO_PI) * NBINS);
       const kb = kappaBins[bin];
       const interface_ = kb * (1 - w);
-      let r = rho[i] + radialVelocity(rho[i] / kb, t) * kb * dt + sigma * rng.gaussian();
+      // The D/rho term is the Itô drift of 2-D Brownian motion's radial
+      // coordinate; without it the walk is 1-D-in-rho and piles a 1/r
+      // density spike at the centre (the old render hid it with centerFade).
+      let r =
+        rho[i] +
+        (radialVelocity(rho[i] / kb, t) * kb + diffusion / Math.max(rho[i], 0.02)) * dt +
+        sigma * rng.gaussian();
       theta[i] += (sigma / Math.max(r, 0.05)) * rng.gaussian();
       if (r < 0) {
         r = -r;
@@ -512,14 +594,20 @@ export function simulateDrop({
     if (alive[i]) leftovers.push({ rho: rho[i], theta: theta[i] });
   }
   if (sweeping) {
-    const n = 18 + rng.int(13);
-    const cuspOffset = rng.uniform(0, TWO_PI / n);
-    const cusps = Array.from({ length: n }, (_, k) => cuspOffset + (k / n) * TWO_PI);
     deposits.push(
-      ...settleInterior({ items: leftovers, total: particles, cusps, tEnd, rng, forceSink: interiorSink }),
+      ...settleInterior({
+        items: leftovers,
+        total: particles,
+        tEnd,
+        rng,
+        forceSink: interiorSink,
+        cuspSpacing: 0.05 + 0.02 * rng.random(),
+      }).deposits,
     );
   } else {
-    for (const p of leftovers) deposits.push({ rho: p.rho, theta: p.theta, t: tEnd, pinned: false });
+    for (const p of leftovers) {
+      deposits.push({ rho: p.rho, theta: p.theta, t: tEnd, pinned: false, sink: 'residue' });
+    }
   }
 
   return { deposits, events };

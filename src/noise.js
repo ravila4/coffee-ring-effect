@@ -56,6 +56,11 @@ export function createNoise2D(random) {
   };
 }
 
+export function smoothstep(edge0, edge1, x) {
+  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
 export function fbm(noise2D, x, y, { octaves = 3, persistence = 0.5, lacunarity = 2 } = {}) {
   let total = 0;
   let amp = 1;

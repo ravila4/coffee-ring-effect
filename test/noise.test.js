@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createNoise2D, fbm } from '../src/noise.js';
+import { createNoise2D, fbm, smoothstep } from '../src/noise.js';
 import { mulberry32 } from '../src/rng.js';
 
 test('noise2D is deterministic for a given seed', () => {
@@ -47,6 +47,23 @@ test('fbm output stays within [-1, 1]', () => {
   for (let i = 0; i < 5000; i++) {
     const v = fbm(noise, r() * 20 - 10, r() * 20 - 10, { octaves: 4 });
     assert.ok(v >= -1 && v <= 1, `out of range: ${v}`);
+  }
+});
+
+test('smoothstep clamps to 0 below edge0 and 1 above edge1', () => {
+  assert.equal(smoothstep(0.2, 0.8, 0), 0);
+  assert.equal(smoothstep(0.2, 0.8, 0.2), 0);
+  assert.equal(smoothstep(0.2, 0.8, 0.8), 1);
+  assert.equal(smoothstep(0.2, 0.8, 1), 1);
+});
+
+test('smoothstep is monotonic with midpoint 0.5', () => {
+  assert.equal(smoothstep(0, 1, 0.5), 0.5);
+  let prev = -1;
+  for (let x = 0; x <= 1.0001; x += 0.05) {
+    const v = smoothstep(0, 1, x);
+    assert.ok(v >= prev);
+    prev = v;
   }
 });
 

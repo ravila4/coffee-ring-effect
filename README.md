@@ -32,6 +32,13 @@ closed-form depth-averaged velocity field directly; no fluid solver needed.
   simplex fBm sampled along a circle in noise space (seamless by construction).
 - **Satellites**: smaller drops scattered along a splash direction run the
   same simulation.
+- **Partial rings**: azimuthal pinning-strength noise; where the line pins
+  weakly it recedes and sloshes mass to pinned arcs → C-shapes and gaps.
+- **Mug rings**: liquid confined to an annular band under the cup rim (both
+  edges pinned, transverse Deegan flow) — dry center, thick/thin band
+  wander, and overlapping placements when the cup got moved.
+- **Drips**: downhill runs off the rim, drawn as wash tongues with darker
+  dried margins and a terminal bulb.
 
 ## Layout
 

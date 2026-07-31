@@ -193,7 +193,10 @@ export function buildStain({
   const satellites = stainType === 'mug' ? rng.int(3) : rng.int(7);
   for (let k = 0; k < satellites; k++) {
     const frac = rng.uniform(0.04, 0.16);
-    const dist = rng.uniform(1.25, 2.0) * radius;
+    // The canvas extends to (0.5 / 0.26) ≈ 1.92 radii from centre; keep the
+    // droplet's far edge — including its contact-line wobble — inside it, or
+    // the splash gets guillotined mid-air.
+    const dist = Math.min(rng.uniform(1.25, 2.0), 1.87 - frac * 1.2) * radius;
     const ang = splashDir + rng.gaussian() * 0.9;
     addDrop({
       cx: dist * Math.cos(ang),

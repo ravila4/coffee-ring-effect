@@ -1,6 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { warpT, warpU, slowMoFactor, radialHistogram } from '../src/animate.js';
+import { warpT, warpU, slowMoFactor, radialHistogram, frameIndexFor } from '../src/animate.js';
+
+// rAF timestamps can precede the performance.now() sampled at play(), so the
+// playback clock can tick slightly negative; the frame lookup must clamp both
+// ends or the first animation frame reads frames[-1] and crashes.
+test('frame index clamps playback outside [0,1]', () => {
+  assert.equal(frameIndexFor(-0.001, 300), 0);
+  assert.equal(frameIndexFor(0, 300), 0);
+  assert.equal(frameIndexFor(1, 300), 299);
+  assert.equal(frameIndexFor(1.002, 300), 299);
+});
+
+test('frame index is monotonic across the playback range', () => {
+  let prev = 0;
+  for (let u = 0; u <= 1; u += 0.01) {
+    const i = frameIndexFor(u, 360);
+    assert.ok(i >= prev && i >= 0 && i <= 359);
+    prev = i;
+  }
+});
 
 // --- playback time warp ---
 // Radial velocity diverges as 1/(1−t), so playback lingers near dry-out:

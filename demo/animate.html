@@ -62,12 +62,14 @@ document.getElementById('rebrew').addEventListener('click', () => {
 });
 document.getElementById('phi').addEventListener('change', brew);
 
-// ?seed=N&phi=X&at=V for reproducible screenshots.
+// ?seed=N&phi=X&at=V for reproducible screenshots; &play=1 starts playback
+// (the component mounts paused).
 const q = new URLSearchParams(location.search);
 if (q.has('seed')) seed = Number(q.get('seed'));
 if (q.has('phi')) document.getElementById('phi').value = q.get('phi');
 brew();
 if (q.has('at')) anim.seek(Number(q.get('at')));
+if (q.has('play')) anim.play();
 </script>
 </body>
 </html>

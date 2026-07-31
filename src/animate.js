@@ -26,6 +26,14 @@ export function slowMoFactor(u, p = 2) {
   return Math.pow(1 - u, 1 - p);
 }
 
+// Playback fraction → snapshot index, clamped on both ends: rAF timestamps
+// can precede the performance.now() sampled when play starts, so the clock
+// can tick slightly outside [0,1].
+export function frameIndexFor(u, frameCount, p = 2) {
+  const t = warpT(Math.min(1, Math.max(0, u)), p);
+  return Math.min(frameCount - 1, Math.max(0, Math.floor(t * frameCount)));
+}
+
 // Mass by radius. density=true divides by annulus area so the initial
 // uniform splash reads flat (= the particle count, since the area fractions
 // sum to 1) and the rim spike reads as the coffee-ring effect, not as "more
@@ -162,7 +170,7 @@ export function mountDryingAnimation(container, {
   scrubC.style.background = 'transparent';
   scrubC.style.cursor = 'pointer';
   scrubC.style.touchAction = 'none';
-  void mainC;
+  mainC.style.cursor = 'pointer';
 
   const bar = document.createElement('div');
   bar.style.cssText = 'display:flex;align-items:center;gap:10px;margin-top:2px;';
@@ -211,10 +219,7 @@ export function mountDryingAnimation(container, {
   const depCtx = depositLayer.getContext('2d');
   depCtx.scale(dpr, dpr);
 
-  const frameFor = (u) => {
-    const t = warpT(u, warpP);
-    return frames[Math.min(frames.length - 1, Math.floor(t * frames.length))];
-  };
+  const frameFor = (u) => frames[frameIndexFor(u, frames.length, warpP)];
 
   const depositTargetAt = () => {
     if (v < uSplit) return frameFor(v / uSplit).depositCount;
@@ -302,6 +307,21 @@ export function mountDryingAnimation(container, {
         const front = tail[Math.min(revealed, tail.length - 1)].rho;
         circle(mainCtx, front * R, 'rgba(138,107,63,0.5)', [3, 3]);
       }
+    }
+
+    if (!playing) {
+      // Click-to-play affordance.
+      mainCtx.fillStyle = 'rgba(74,59,42,0.55)';
+      mainCtx.beginPath();
+      mainCtx.arc(28, mainSize - 28, 16, 0, 2 * Math.PI);
+      mainCtx.fill();
+      mainCtx.fillStyle = PAPER;
+      mainCtx.beginPath();
+      mainCtx.moveTo(23, mainSize - 36);
+      mainCtx.lineTo(23, mainSize - 20);
+      mainCtx.lineTo(36, mainSize - 28);
+      mainCtx.closePath();
+      mainCtx.fill();
     }
   };
 
@@ -488,7 +508,7 @@ export function mountDryingAnimation(container, {
 
   const tick = (now) => {
     if (playing) {
-      v = Math.min(1, v + (now - lastNow) / total);
+      v = Math.min(1, Math.max(0, v + (now - lastNow) / total));
       lastNow = now;
       if (v >= 1) pause();
       render();
@@ -511,6 +531,7 @@ export function mountDryingAnimation(container, {
     render();
   };
   playBtn.addEventListener('click', () => (playing ? pause() : play()));
+  mainC.addEventListener('click', () => (playing ? pause() : play()));
 
   let wasPlaying = false;
   const seekTo = (clientX) => {
@@ -531,7 +552,7 @@ export function mountDryingAnimation(container, {
     if (wasPlaying && v < 1) play();
   });
 
-  play();
+  render(); // starts paused: click the drop (or the button) to play
 
   return {
     destroy() {

@@ -29,7 +29,6 @@ export function buildStain({
   particles = 3500,
   type = 'auto', // 'drop' | 'mug' | 'auto'
   partialChance = 0.55,
-  dripChance = 0.4,
   mugChance = 0.5,
   overlapChance = 0.45,
   dropOverrides = {},
@@ -169,16 +168,14 @@ export function buildStain({
       const rr = (out + inn) / 2 + (d.u * (out - inn)) / 2;
       pushSplat(cx + rr * Math.cos(d.theta), cy + rr * Math.sin(d.theta), !d.pinned, shadeAt(d.theta));
     }
-    return outerR;
   };
 
-  let outerEdge = () => radius * 0.96;
   if (stainType === 'mug') {
     const wBase = radius * rng.uniform(0.1, 0.16);
     const R = radius - wBase;
     const placements = rng.random() < overlapChance ? 2 + rng.int(2) : 1;
     for (let k = 0; k < placements; k++) {
-      const edge = addMugRing({
+      addMugRing({
         cx: k === 0 ? 0 : rng.gaussian() * 0.1 * radius,
         cy: k === 0 ? 0 : rng.gaussian() * 0.1 * radius,
         R: R * rng.uniform(0.97, 1.03),
@@ -186,7 +183,6 @@ export function buildStain({
         count: Math.floor(particles * 0.55),
         overrides: k === 0 ? dropOverrides : {},
       });
-      if (k === 0) outerEdge = edge;
     }
   } else {
     addDrop({ cx: 0, cy: 0, r: radius, count: particles, overrides: dropOverrides });
@@ -205,71 +201,6 @@ export function buildStain({
       r: frac * radius,
       count: Math.max(120, Math.floor(particles * frac * frac * 4)),
     });
-  }
-
-  // Runs that dribbled off the rim. They share one direction (the table's
-  // tilt), bend only gently, dry with darker margins (their own edge
-  // deposition) and end in a rounded dried bulb. Biased downward on screen —
-  // any direction is physically valid on a table, but eyes expect runs to
-  // fall, and upward pairs read as antennae.
-  if (rng.random() < dripChance) {
-    const drips = 1 + rng.int(2);
-    const tilt = Math.PI / 2 + rng.gaussian() * 0.5;
-    for (let k = 0; k < drips; k++) {
-      const a = tilt + rng.gaussian() * 0.35;
-      const len = rng.uniform(0.25, 0.6) * radius;
-      const w0 = radius * rng.uniform(0.06, 0.09);
-      const curve = rng.uniform(-0.2, 0.2);
-      const startR = outerEdge(a) * 0.99;
-      const sx = startR * Math.cos(a);
-      const sy = startR * Math.sin(a);
-      const steps = Math.max(14, Math.floor(len / (w0 * 0.3)));
-      const left = [];
-      const right = [];
-      let ex = sx;
-      let ey = sy;
-      let endAng = a;
-      for (let s = 0; s <= steps; s++) {
-        const f = s / steps;
-        const ang = a + curve * f;
-        const x = sx + len * f * Math.cos(ang);
-        const y = sy + len * f * Math.sin(ang);
-        const w = w0 * (1 - 0.45 * f);
-        const px = -Math.sin(ang);
-        const py = Math.cos(ang);
-        left.push({ x: x + px * w, y: y + py * w });
-        right.push({ x: x - px * w, y: y - py * w });
-        // The run dries with its own edge deposition: darker margins.
-        if (s % 2 === 0) {
-          for (const side of [-1, 1]) {
-            splats.push({
-              x: x + side * px * w,
-              y: y + side * py * w,
-              r: w * 0.35,
-              alpha: 0.12,
-              color: RING_COLORS[2],
-            });
-          }
-        }
-        ex = x;
-        ey = y;
-        endAng = ang;
-      }
-      // Rounded dried bulb where the run stopped.
-      const bw = w0 * 0.9;
-      for (let m = 0; m <= 10; m++) {
-        const phi = endAng + Math.PI / 2 - (m / 10) * Math.PI;
-        const bx = ex + bw * Math.cos(phi);
-        const by = ey + bw * Math.sin(phi);
-        left.push({ x: bx, y: by });
-        splats.push({ x: bx, y: by, r: bw * 0.35, alpha: 0.13, color: RING_COLORS[2] });
-      }
-      washes.push({
-        points: left.concat(right.reverse()),
-        color: WASH_COLOR,
-        alpha: rng.uniform(0.2, 0.28),
-      });
-    }
   }
 
   return { splats, washes, radius, seed, type: stainType };

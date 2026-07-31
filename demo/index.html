@@ -31,6 +31,11 @@
   figure { margin: 0; background: #fffdf7; border: 1px solid #e4d9c2; border-radius: 8px; padding: .6rem; }
   canvas { width: 100%; height: auto; display: block; cursor: pointer; }
   figcaption { font-size: .78rem; color: #8a7a60; text-align: center; padding-top: .4rem; font-variant-numeric: tabular-nums; }
+  /* Dark-field flips the page to match the black canvases; the control
+     surfaces keep their cream palette so they stay recognizable. */
+  body.darkfield { background: #171310; color: #cbbfa8; }
+  body.darkfield .controls, body.darkfield p.note, body.darkfield .hint { color: #a2937b; }
+  body.darkfield figure { background: #000; border-color: #37302a; }
 </style>
 </head>
 <body>
@@ -100,6 +105,18 @@
       shrink the stain when you want to see a whole splatter.
     </div>
   </span>
+  <span class="ctl">
+    <label><input type="checkbox" id="dark"> dark-field</label>
+    <button class="help" type="button" aria-controls="help-dark" aria-expanded="false" aria-label="what does dark-field do?">?</button>
+    <div class="tip" id="help-dark" hidden>
+      The microscope view. Normally a stain is drawn the way your eye would see
+      it: translucent brown pigment on paper. Dark-field instead mimics the
+      micrographs in Deegan's papers — every deposited particle glows white on
+      black, with no wash — so the fine structure the brown render smooths
+      over, like the scalloped arches inside the rim and the branching veins,
+      stands out. The physics underneath is identical; only the paint changes.
+    </div>
+  </span>
 </div>
 <p class="note">
   Each stain is a drying puddle of coffee, simulated one particle at a time.
@@ -147,6 +164,9 @@ const phiFrom = (v) => lerpLog(0.0005, 0.03, v / 100);
 const params = () => ({
   type: $('type').value,
   radiusFraction: $('frac').value / 100,
+  // Dark-field lives on tracer density: at grain-size dots the default
+  // count reads as sparse noise, so the microscope view brews stronger.
+  ...($('dark').checked ? { darkField: true, particles: 12000 } : {}),
   ...($('weAuto').checked ? {} : { splashEnergy: weFrom($('we').value) }),
   ...($('phiAuto').checked ? {} : { dropOverrides: { phi: phiFrom($('phi').value) } }),
 });
@@ -192,6 +212,10 @@ for (const id of ['we', 'phi', 'frac']) {
 for (const id of ['type', 'weAuto', 'phiAuto']) {
   $(id).addEventListener('change', () => { showValues(); redrawAll(); });
 }
+$('dark').addEventListener('change', () => {
+  document.body.classList.toggle('darkfield', $('dark').checked);
+  redrawAll();
+});
 
 // Help popovers: one open at a time, dismissed by Escape or a click elsewhere.
 const helpButtons = [...document.querySelectorAll('button.help')];
@@ -224,6 +248,9 @@ const brew = () => {
 };
 document.getElementById('rebrew').addEventListener('click', brew);
 showValues();
+// ?dark=1 boots straight into the microscope view (and lets the headless
+// screenshot loop verify it).
+if (new URLSearchParams(location.search).has('dark')) $('dark').click();
 brew();
 </script>
 </body>

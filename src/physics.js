@@ -377,7 +377,10 @@ export function simulateDrop({
     } else {
       const arcOverR = holeAngularWidth(epoch.phiEff);
       const halfWidth = ((arcOverR / epoch.base) / 2) * rng.uniform(0.7, 1.3);
-      const arrestDepth = 0.8 * halfWidth * epoch.base * rng.uniform(0.75, 1.25);
+      // Depth ≈ width·1.3: Fig. 9's cells measure round-to-tall (equivalent
+      // diameter ≈ the Fig. 13 arc length), not the shallow scallops a
+      // semicircular cap would leave. Width stays the calibrated law.
+      const arrestDepth = 1.3 * halfWidth * epoch.base * rng.uniform(0.75, 1.25);
       epoch.holes.push({
         theta: holeAzimuth(),
         halfWidth,
@@ -417,7 +420,7 @@ export function simulateDrop({
       const off = rng.uniform(-1, 1) * (parent.halfWidth - halfWidth);
       // Parent floor under the child's centre (the cos² edge profile).
       const edge = Math.cos((Math.PI / 2) * (Math.abs(off) / parent.halfWidth));
-      const ownDepth = 0.8 * halfWidth * localR * rng.uniform(0.75, 1.25);
+      const ownDepth = 1.3 * halfWidth * localR * rng.uniform(0.75, 1.25);
       epoch.holes.push({
         theta: parent.theta + off,
         halfWidth,

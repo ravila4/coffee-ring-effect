@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>coffee rings — evaporation-driven particle deposition</title>
+<style>
+  body { margin: 0; font: 14px/1.5 -apple-system, "Helvetica Neue", sans-serif; background: #f6f1e5; color: #4a3b2a; }
+  header { padding: 1.2rem 2rem 0; display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap; }
+  h1 { font-size: 1.1rem; margin: 0; }
+  button { font: inherit; padding: .35rem .9rem; border: 1px solid #b9a888; background: #fffdf7; border-radius: 6px; cursor: pointer; }
+  button:hover { background: #f3ecda; }
+  p.note { padding: 0 2rem; max-width: 62rem; color: #6b5b44; }
+  main { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; padding: 1rem 2rem 3rem; }
+  figure { margin: 0; background: #fffdf7; border: 1px solid #e4d9c2; border-radius: 8px; padding: .6rem; }
+  canvas { width: 100%; height: auto; display: block; cursor: pointer; }
+  figcaption { font-size: .78rem; color: #8a7a60; text-align: center; padding-top: .4rem; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<header>
+  <h1>coffee rings — evaporation-driven particle deposition</h1>
+  <button id="rebrew">brew a fresh batch</button>
+</header>
+<p class="note">
+  Each stain is a Monte-Carlo run of Deegan's coffee-ring physics: solute
+  particles advected by the outward capillary flow of a drying droplet whose
+  contact line is pinned, jamming where they reach it. Spills keep a mottled
+  interior wash; mug-bottom rings are dry in the center, wander thick and thin,
+  and sometimes overlap where the cup was set down twice. Weakly-pinned arcs
+  leave C-shaped gaps; stick-slip recession leaves nested inner rings. Click a
+  stain to re-brew it.
+</p>
+<main id="grid"></main>
+<script type="module">
+import { generateStainCanvas } from '../src/render.js';
+
+const SIZE = 560;
+const grid = document.getElementById('grid');
+const randomSeed = () => Math.floor(Math.random() * 2 ** 32);
+
+function makeCell(seed) {
+  const fig = document.createElement('figure');
+  const canvas = document.createElement('canvas');
+  const cap = document.createElement('figcaption');
+  fig.append(canvas, cap);
+  const draw = (s) => {
+    const t0 = performance.now();
+    generateStainCanvas({ size: SIZE, seed: s, canvas });
+    cap.textContent = `seed ${s} · ${(performance.now() - t0).toFixed(0)} ms`;
+  };
+  canvas.addEventListener('click', () => draw(randomSeed()));
+  draw(seed);
+  return fig;
+}
+
+const brew = () => {
+  grid.replaceChildren();
+  for (let i = 0; i < 9; i++) grid.append(makeCell(randomSeed()));
+};
+document.getElementById('rebrew').addEventListener('click', brew);
+brew();
+</script>
+</body>
+</html>

@@ -22,6 +22,11 @@ const RING_COLORS = [
   [84, 45, 12],
 ];
 const WASH_COLOR = [172, 122, 62];
+// Tracer count the alpha palette was tuned at. The count is numerical
+// resolution, not physics — the coffee's pigment is set by phi — so pigment
+// splats normalize their alpha against this baseline. Dark-field ignores
+// alpha on purpose: fluorescence brightness IS particle count.
+const TRACER_BASELINE = 3500;
 
 // generateStainCanvas draws at radius = radiusFraction * size, so anything
 // further than 0.5/radiusFraction radii from centre is clipped off the canvas
@@ -220,6 +225,9 @@ export function buildStain({
         });
   };
 
+  // Capped for sparse test runs, where the inverse rule would blow past
+  // opaque.
+  const alphaNorm = Math.min(2, TRACER_BASELINE / particles);
   const pushSplat = (x, y, deposit, shade) => {
     const style = splatStyleFor(deposit);
     splats.push({
@@ -228,7 +236,7 @@ export function buildStain({
       r: splatBase * rng.uniform(0.6, 1.4) * style.r,
       // Azimuthal shade belongs to the contact line, so it only modulates
       // jammed deposits; interior structure paints flat.
-      alpha: rng.uniform(style.aLo, style.aHi) * (deposit.pinned ? shade : 1),
+      alpha: rng.uniform(style.aLo, style.aHi) * (deposit.pinned ? shade : 1) * alphaNorm,
       color: RING_COLORS[rng.int(RING_COLORS.length)],
     });
   };

@@ -148,7 +148,7 @@
 </p>
 <main id="grid"></main>
 <script type="module">
-import { generateStainCanvas } from '../src/render.js';
+import { generateStainCanvas, paintStain } from '../src/render.js';
 
 const SIZE = 560;
 const grid = document.getElementById('grid');
@@ -164,9 +164,12 @@ const phiFrom = (v) => lerpLog(0.0005, 0.03, v / 100);
 const params = () => ({
   type: $('type').value,
   radiusFraction: $('frac').value / 100,
-  // Dark-field lives on tracer density: at grain-size dots the default
-  // count reads as sparse noise, so the microscope view brews stronger.
-  ...($('dark').checked ? { darkField: true, particles: 12000 } : {}),
+  // One simulation serves both views — the dark-field toggle repaints the
+  // cached stain, never re-brews, so the microscope shows the SAME stain.
+  // The count sits high for dark-field density; beige splat alpha
+  // normalizes against the tracer budget in the renderer.
+  particles: 12000,
+  darkField: $('dark').checked,
   ...($('weAuto').checked ? {} : { splashEnergy: weFrom($('we').value) }),
   ...($('phiAuto').checked ? {} : { dropOverrides: { phi: phiFrom($('phi').value) } }),
 });
@@ -189,6 +192,7 @@ function makeCell(seed) {
 function drawCell(cell) {
   const t0 = performance.now();
   const { stain } = generateStainCanvas({ size: SIZE, seed: cell.seed, canvas: cell.canvas, ...params() });
+  cell.stain = stain;
   const ms = (performance.now() - t0).toFixed(0);
   cell.cap.textContent =
     `seed ${cell.seed} · ${stain.type} · We ${stain.splashEnergy.toFixed(0)} · ${ms} ms`;
@@ -214,7 +218,12 @@ for (const id of ['type', 'weAuto', 'phiAuto']) {
 }
 $('dark').addEventListener('change', () => {
   document.body.classList.toggle('darkfield', $('dark').checked);
-  redrawAll();
+  // Repaint the cached stains — same simulation, different microscope.
+  for (const cell of cells) {
+    const ctx = cell.canvas.getContext('2d');
+    ctx.clearRect(0, 0, cell.canvas.width, cell.canvas.height);
+    paintStain(ctx, cell.stain, { cx: SIZE / 2, cy: SIZE / 2, darkField: $('dark').checked });
+  }
 });
 
 // Help popovers: one open at a time, dismissed by Escape or a click elsewhere.

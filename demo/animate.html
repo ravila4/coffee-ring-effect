@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Watch a coffee drop dry</title>
+<style>
+  body { margin: 0; font: 14px/1.5 -apple-system, "Helvetica Neue", sans-serif; background: #f6f1e5; color: #4a3b2a; }
+  header { padding: 1.2rem 2rem 0; display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap; }
+  h1 { font-size: 1.1rem; margin: 0; }
+  button, select { font: inherit; padding: .35rem .9rem; border: 1px solid #b9a888; background: #fffdf7; border-radius: 6px; cursor: pointer; color: inherit; }
+  button:hover { background: #f3ecda; }
+  .controls { display: flex; align-items: center; gap: 1.4rem; flex-wrap: wrap; padding: .6rem 2rem 0; font-size: .82rem; color: #6b5b44; }
+  .controls label { display: flex; align-items: center; gap: .4rem; }
+  p.note { padding: 0 2rem .2rem; max-width: 62rem; color: #6b5b44; }
+  #stage { padding: 1rem 2rem 3rem; }
+  .seed { font-variant-numeric: tabular-nums; color: #8a7a60; font-size: .78rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Watch a coffee drop dry</h1>
+  <button id="rebrew">new drop</button>
+  <span class="seed" id="seedout"></span>
+</header>
+<div class="controls">
+  <label>coffee strength φ
+    <select id="phi">
+      <option value="0.001">dilute (0.001) — broken ring, spokes</option>
+      <option value="0.003" selected>medium (0.003) — nested rings</option>
+      <option value="0.02">strong (0.02) — broad solid rim</option>
+    </select>
+  </label>
+</div>
+<p class="note">
+  The drop starts as an even splash of suspended particles. Water evaporates
+  fastest at the pinned edge, so an outward flow carries particles to the rim,
+  where they jam. Playback runs in slow motion near the end — the flow speeds
+  up as the water runs out — and the tick marks on the timeline show how much
+  of the drying each stretch of playback covers.
+</p>
+<div id="stage"></div>
+<script type="module">
+import { mountDryingAnimation } from '../src/animate.js';
+
+const stage = document.getElementById('stage');
+const seedout = document.getElementById('seedout');
+let seed = Math.floor(Math.random() * 2 ** 32);
+let anim = null;
+
+const brew = () => {
+  if (anim) anim.destroy();
+  const phi = Number(document.getElementById('phi').value);
+  seedout.textContent = `seed ${seed} · φ ${phi}`;
+  anim = mountDryingAnimation(stage, { seed, phi });
+  window.anim = anim; // headless screenshot hook
+};
+
+document.getElementById('rebrew').addEventListener('click', () => {
+  seed = Math.floor(Math.random() * 2 ** 32);
+  brew();
+});
+document.getElementById('phi').addEventListener('change', brew);
+
+// ?seed=N&phi=X&at=V for reproducible screenshots.
+const q = new URLSearchParams(location.search);
+if (q.has('seed')) seed = Number(q.get('seed'));
+if (q.has('phi')) document.getElementById('phi').value = q.get('phi');
+brew();
+if (q.has('at')) anim.seek(Number(q.get('at')));
+</script>
+</body>
+</html>

@@ -278,6 +278,28 @@ test('subarch recursion is bounded and tagged by generation', () => {
   assert.ok(sawChild, 'a rich drop nucleated no subarches at all');
 });
 
+test('hole fronts recede at the diverging late-drying speed, not a fixed clock', () => {
+  // Hole growth is contact-line recession, so its speed carries the same
+  // 1/(1−t) divergence as the flow field: speed = 0.5/(1−t) × jitter[0.7,1.3].
+  // A fixed timescale starves high-φ drops, whose depinning starts at
+  // τ_d ≈ 0.87 — every arch generation must arrest in the last 13%.
+  for (const phi of [0.02, 0.005]) {
+    const { events } = simulateDrop({ particles: 2000, phi, rng: makeRng(404) });
+    let checked = 0;
+    for (const e of events) {
+      for (const h of e.holes) {
+        const speed = h.growthRate * (1 - h.tNucleated);
+        assert.ok(
+          speed >= 0.34 && speed <= 0.66,
+          `hole at t=${h.tNucleated.toFixed(3)} (phi ${phi}) recedes at ${speed.toFixed(3)}R per remaining-drying, expected 0.5×[0.7,1.3]`,
+        );
+        checked++;
+      }
+    }
+    assert.ok(checked >= 20, `too few holes to judge at phi ${phi}: ${checked}`);
+  }
+});
+
 test('severing occurs when hole coverage passes ~63% and starts a new epoch', () => {
   // Force a dense fence of holes; coverage crosses the union threshold.
   const holes = [];

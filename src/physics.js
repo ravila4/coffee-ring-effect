@@ -75,6 +75,14 @@ const NBINS = 512; // azimuthal contact-line bins; oversamples 0.02-0.07 rad hol
 const GRAIN = 0.004; // deposit jitter at the interface, a few grain diameters
 const SEVER_COVERAGE = 0.63; // N·⟨L⟩ ~ C (paper) → 1−e⁻¹ union coverage
 const MAX_ARCH_GENERATION = 2; // parent + 2 layers of subarches per epoch
+// A hole's edge is receding contact line, so its speed carries the flow
+// field's 1/(1−t) divergence: speed = HOLE_FRONT_SPEED/(1−t). A fixed
+// arrest timescale starves high-φ drops (depin at τ_d ≈ 0.87 leaves the
+// whole arch zone 13% of the drying) and over-arrests dilute ones, where
+// Deegan sees arches "grow without bound". 0.5 anchors the φ = 0.005 arch
+// (0.037R deep, depin t ≈ 0.6) at its cell-morphometrics-calibrated ~0.03
+// arrest time.
+const HOLE_FRONT_SPEED = 0.5;
 const TWO_PI = 2 * Math.PI;
 
 const wrap = (theta) => ((theta % TWO_PI) + TWO_PI) % TWO_PI;
@@ -386,7 +394,7 @@ export function simulateDrop({
         halfWidth,
         arrestDepth,
         tNucleated: t,
-        growthRate: arrestDepth / (0.03 * rng.uniform(0.7, 1.3)),
+        growthRate: (HOLE_FRONT_SPEED / (1 - t)) * rng.uniform(0.7, 1.3),
         generation: 0,
       });
     }
@@ -426,7 +434,7 @@ export function simulateDrop({
         halfWidth,
         arrestDepth: parent.arrestDepth * edge * edge + ownDepth,
         tNucleated: t,
-        growthRate: ownDepth / (0.03 * rng.uniform(0.7, 1.3)),
+        growthRate: (HOLE_FRONT_SPEED / (1 - t)) * rng.uniform(0.7, 1.3),
         generation: parent.generation + 1,
       });
     }
@@ -445,6 +453,7 @@ export function simulateDrop({
         halfWidth: h.halfWidth,
         arrestDepth: h.arrestDepth,
         tNucleated: h.tNucleated,
+        growthRate: h.growthRate,
         generation: h.generation,
       })),
     });

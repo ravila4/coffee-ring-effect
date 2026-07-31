@@ -175,7 +175,7 @@ test('a forced hole leaves an arch: deposits trace its window below the ring', (
     holeSchedule: [hole],
     rng: makeRng(107),
   });
-  assert.equal(events[0].holes.length, 1);
+  assert.equal(events[0].holes.filter((h) => h.generation === 0).length, 1);
   const wFinal = events[0].wAtEnd;
   const ringFloor = 1 - wFinal - 0.02; // below the un-holed interface band
   const arch = deposits.filter((d) => d.pinned && d.rho < ringFloor && d.rho > 1 - 0.07 - wFinal - 0.03);
@@ -184,6 +184,97 @@ test('a forced hole leaves an arch: deposits trace its window below the ring', (
     const off = Math.abs(normalizeTheta(d.theta) - Math.PI / 2);
     assert.ok(off < 0.25 + 0.15, `arch deposit far outside hole window: Δθ=${off}`);
   }
+});
+
+test('an arrested arch hosts the next generation of holes (subarches)', () => {
+  // Fig. 11: large arches are composed of multiple subarches — holes nucleate
+  // on the new contact line an arrested arch creates, not just the rim.
+  const hole = { t: 0.45, theta: Math.PI / 2, halfWidth: 0.3, arrestDepth: 0.06 };
+  const { events } = simulateDrop({
+    particles: 2500,
+    phi: 0.01,
+    holeSchedule: [hole],
+    rng: makeRng(401),
+  });
+  const children = events[0].holes.filter((h) => h.generation > 0);
+  assert.ok(children.length > 0, 'no subarches nucleated');
+  const dt = 0.98 / 300;
+  for (const c of children) {
+    // A forced hole arrests at tNucleated + 0.03; children only after that.
+    assert.ok(c.tNucleated >= 0.45 + 0.03 - dt, `child before parent arrest: t=${c.tNucleated}`);
+    const off = Math.abs(normalizeTheta(c.theta) - Math.PI / 2);
+    assert.ok(off + c.halfWidth <= 0.3 + 1e-9, `child window pokes outside the parent arch`);
+    assert.ok(c.halfWidth < 0.3, 'child as wide as its parent');
+  }
+});
+
+test('subarch deposits build a second fence below the parent arch floor', () => {
+  // Low phi → large subarches (Fig. 13), so the child fence separates
+  // cleanly from the parent floor's grain jitter.
+  const hole = { t: 0.4, theta: Math.PI / 2, halfWidth: 0.3, arrestDepth: 0.05 };
+  const { deposits, events } = simulateDrop({
+    particles: 4000,
+    phi: 0.005,
+    holeSchedule: [hole],
+    rng: makeRng(402),
+  });
+  const children = events[0].holes.filter((h) => h.generation > 0);
+  assert.ok(children.length > 0, 'no subarches nucleated');
+  const deepest = Math.max(...children.map((h) => h.arrestDepth));
+  assert.ok(deepest > 0.06, `no child carved below the parent floor: ${deepest}`);
+  // Child holes carve below the parent's arrest floor, so pinned deposits
+  // must appear deeper than the parent fence within the hole's window.
+  const wEnd = events[0].wAtEnd;
+  const parentFloor = (1 - 0.05) * (1 - wEnd);
+  const deeper = deposits.filter((d) => {
+    const off = Math.abs(normalizeTheta(d.theta) - Math.PI / 2);
+    return d.pinned && off < 0.3 && d.rho < parentFloor - 0.015;
+  });
+  assert.ok(deeper.length >= 5, `only ${deeper.length} deposits below the parent arch floor`);
+});
+
+test('a growing hole snowplows swept particles onto its arrest contour', () => {
+  // The paper's arch walls are bright: particles caught by the receding
+  // front ride it and jam at the arrest line ("walled in by jamming
+  // particles"). Deposits caught mid-growth must land on the arch contour,
+  // not smear across the swept area — the cell interiors stay dark.
+  const hole = { t: 0.5, theta: Math.PI / 2, halfWidth: 0.25, arrestDepth: 0.08 };
+  const { deposits, events } = simulateDrop({
+    particles: 5000,
+    phi: 0.01,
+    holeSchedule: [hole],
+    rng: makeRng(404),
+  });
+  // Core of the window during the growth window only (a forced hole arrests
+  // at t + 0.03): where its own floor is the deepest contour and subarches
+  // have not yet nucleated.
+  const grow = deposits.filter((d) => {
+    const off = Math.abs(normalizeTheta(d.theta) - Math.PI / 2);
+    return d.pinned && off < 0.1 && d.t >= 0.5 && d.t < 0.53;
+  });
+  assert.ok(grow.length >= 5, `too few growth-window deposits to judge: ${grow.length}`);
+  // Arch contour follows the hole's cos² edge profile: at azimuthal offset
+  // ε the floor is 1 − 0.08·cos²((π/2)(ε/0.25)). With w ≥ wAtDepin nothing
+  // may sit above that contour in the swept band.
+  for (const d of grow) {
+    const off = Math.abs(normalizeTheta(d.theta) - Math.PI / 2);
+    const edge = Math.cos((Math.PI / 2) * (off / 0.25));
+    const wall = (1 - 0.08 * edge * edge) * (1 - events[0].wAtDepin) + 0.005;
+    assert.ok(d.rho <= wall, `mid-growth deposit smeared at rho=${d.rho.toFixed(3)} > ${wall.toFixed(3)}`);
+  }
+});
+
+test('subarch recursion is bounded and tagged by generation', () => {
+  const { events } = simulateDrop({ particles: 2000, phi: 0.02, rng: makeRng(403) });
+  let sawChild = false;
+  for (const e of events) {
+    for (const h of e.holes) {
+      assert.ok(Number.isInteger(h.generation) && h.generation >= 0, 'untagged hole');
+      assert.ok(h.generation <= 2, `runaway recursion: generation ${h.generation}`);
+      if (h.generation > 0) sawChild = true;
+    }
+  }
+  assert.ok(sawChild, 'a rich drop nucleated no subarches at all');
 });
 
 test('severing occurs when hole coverage passes ~63% and starts a new epoch', () => {

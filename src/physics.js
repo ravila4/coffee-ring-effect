@@ -74,6 +74,7 @@ export function radialVelocity(rho, t) {
 const NBINS = 512; // azimuthal contact-line bins; oversamples 0.02-0.07 rad holes
 const GRAIN = 0.004; // deposit jitter at the interface, a few grain diameters
 const SEVER_COVERAGE = 0.63; // N·⟨L⟩ ~ C (paper) → 1−e⁻¹ union coverage
+const MAX_ARCH_GENERATION = 2; // parent + 2 layers of subarches per epoch
 const TWO_PI = 2 * Math.PI;
 
 const wrap = (theta) => ((theta % TWO_PI) + TWO_PI) % TWO_PI;
@@ -295,6 +296,7 @@ export function simulateDrop({
         arrestDepth: forced.arrestDepth,
         tNucleated: t,
         growthRate: forced.arrestDepth / 0.03,
+        generation: 0,
       });
     } else {
       const arcOverR = holeAngularWidth(epoch.phiEff);
@@ -306,6 +308,7 @@ export function simulateDrop({
         arrestDepth,
         tNucleated: t,
         growthRate: arrestDepth / (0.03 * rng.uniform(0.7, 1.3)),
+        generation: 0,
       });
     }
     if (epoch.tOnset === null) {
@@ -316,6 +319,37 @@ export function simulateDrop({
       const expectedHoles = TWO_PI / (holeAngularWidth(epoch.phiEff) / epoch.base);
       epoch.nucleationGap = (0.6 * (1 - t)) / Math.max(1, expectedHoles);
       epoch.nextNucleation = t + epoch.nucleationGap * rng.uniform(0.5, 1.5);
+    }
+  };
+
+  // Recursive depinning (Fig. 11: large arches are composed of subarches):
+  // an arrested arch is itself a pinned contact line, so the next generation
+  // of holes nucleates on it — sized by the same Fig. 13 arch-length law at
+  // the receded local radius and nested inside the parent's window. A child's
+  // depth is stored from the epoch base so the kappa-bin union composes
+  // unchanged; its growth therefore spends its early life "re-drying" the
+  // parent's hole, and that dead time is the nucleation delay.
+  const spawnChildren = (parent, t) => {
+    const localR = epoch.base - parent.arrestDepth;
+    if (localR < 0.15) return;
+    const count = 1 + rng.int(2);
+    for (let k = 0; k < count; k++) {
+      const halfWidth = Math.min(
+        (holeAngularWidth(phiEffAt(t)) / localR / 2) * rng.uniform(0.7, 1.3),
+        parent.halfWidth * 0.95,
+      );
+      const off = rng.uniform(-1, 1) * (parent.halfWidth - halfWidth);
+      // Parent floor under the child's centre (the cos² edge profile).
+      const edge = Math.cos((Math.PI / 2) * (Math.abs(off) / parent.halfWidth));
+      const ownDepth = 0.8 * halfWidth * localR * rng.uniform(0.75, 1.25);
+      epoch.holes.push({
+        theta: parent.theta + off,
+        halfWidth,
+        arrestDepth: parent.arrestDepth * edge * edge + ownDepth,
+        tNucleated: t,
+        growthRate: ownDepth / (0.03 * rng.uniform(0.7, 1.3)),
+        generation: parent.generation + 1,
+      });
     }
   };
 
@@ -332,6 +366,7 @@ export function simulateDrop({
         halfWidth: h.halfWidth,
         arrestDepth: h.arrestDepth,
         tNucleated: h.tNucleated,
+        generation: h.generation,
       })),
     });
   };
@@ -368,7 +403,24 @@ export function simulateDrop({
       }
     }
 
+    // Arrested arches host the next generation (bounded recursion). Snapshot
+    // the length: children pushed here arrest later, not this step.
+    const grown = epoch.holes.length;
+    for (let h = 0; h < grown; h++) {
+      const hole = epoch.holes[h];
+      if (hole.generation >= MAX_ARCH_GENERATION || hole.spawned) continue;
+      if (t >= hole.tNucleated + hole.arrestDepth / hole.growthRate) {
+        hole.spawned = true;
+        spawnChildren(hole, t);
+      }
+    }
+
     const kappaBins = buildKappaBins(epoch.base, epoch.holes, t);
+    // Arrest contour (holes at full depth): a particle caught by a growing
+    // hole rides the receding front and jams where the front will arrest —
+    // the snowplow that makes arch walls bright and cell interiors dark.
+    // Passing t = ∞ rasterizes every hole at its arrestDepth.
+    const floorBins = buildKappaBins(epoch.base, epoch.holes, Infinity);
 
     // Severing: union of grown holes covers enough of the circumference.
     if (epoch.holes.length > 0) {
@@ -423,12 +475,13 @@ export function simulateDrop({
         // release the moderate arcs that carry most of the rim and bleach
         // the ring wholesale.
         if (!pinningAt || t < pinningAt(theta[i]) * tEnd) {
-          // Jammed at the growing solid-liquid interface.
+          // Jammed at the growing solid-liquid interface — on the arrest
+          // contour where a hole is still deepening (the snowplow).
           alive[i] = 0;
           aliveCount--;
           depositMass[bin]++;
           deposits.push({
-            rho: Math.max(0, interface_ - Math.abs(rng.gaussian()) * GRAIN),
+            rho: Math.max(0, floorBins[bin] * (1 - w) - Math.abs(rng.gaussian()) * GRAIN),
             theta: theta[i],
             t,
             pinned: true,

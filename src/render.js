@@ -440,11 +440,31 @@ export function buildStain({
   return { splats, washes, radius, seed, type: stainType, splashEnergy: We, splashDir, fingerAzimuths };
 }
 
-export function paintStain(ctx, stain, { cx = 0, cy = 0 } = {}) {
+export function paintStain(ctx, stain, { cx = 0, cy = 0, darkField = false } = {}) {
   const trace = (pts) => {
     pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
     ctx.closePath();
   };
+  if (darkField) {
+    // Debug view matching Deegan's binarized dark-field photographs (PRE 61
+    // Fig. 9): deposit scatters light → white, bare substrate → black. No
+    // washes, no pigment palette, dots near grain scale — the structural
+    // skeleton (arch fences, veins, arcs) without the aesthetic blur on top.
+    ctx.save();
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    ctx.translate(cx, cy);
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    for (const s of stain.splats) {
+      ctx.beginPath();
+      // 0.25 × splat base ≈ the sim's deposit-grain scale (GRAIN·R): fence
+      // walls and veins stay resolvable instead of smearing into blobs.
+      ctx.arc(s.x, s.y, Math.max(0.55, s.r * 0.25), 0, 2 * Math.PI);
+      ctx.fill();
+    }
+    ctx.restore();
+    return;
+  }
   ctx.save();
   ctx.translate(cx, cy);
   ctx.globalCompositeOperation = 'multiply';
@@ -469,6 +489,7 @@ export function generateStainCanvas({
   seed,
   canvas,
   radiusFraction = DEFAULT_RADIUS_FRACTION,
+  darkField = false,
   ...options
 } = {}) {
   const c =
@@ -484,6 +505,6 @@ export function generateStainCanvas({
     canvasBound: 0.5 / radiusFraction,
     ...options,
   });
-  paintStain(c.getContext('2d'), stain, { cx: size / 2, cy: size / 2 });
+  paintStain(c.getContext('2d'), stain, { cx: size / 2, cy: size / 2, darkField });
   return { canvas: c, stain };
 }

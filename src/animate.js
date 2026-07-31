@@ -451,13 +451,18 @@ export function mountDryingAnimation(container, {
   const bases = frames.map((f) => f.base);
   const inners = frames.map((f) => f.innerEdge);
 
+  // Dashed and muted so the time cursor can't be mistaken for a data curve
+  // (a solid dark playhead next to the depinning step reads as the contact
+  // line jumping back up).
   const playhead = (ctx, tFrac) => {
-    ctx.strokeStyle = 'rgba(138,107,63,0.9)';
+    ctx.strokeStyle = 'rgba(185,168,136,0.9)';
     ctx.lineWidth = 1;
+    ctx.setLineDash([2, 3]);
     ctx.beginPath();
     ctx.moveTo(px(tFrac), py(0));
     ctx.lineTo(px(tFrac), py(1));
     ctx.stroke();
+    ctx.setLineDash([]);
   };
 
   const drawFrac = (tFrac) => {

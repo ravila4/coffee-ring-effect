@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>coffee rings — evaporation-driven particle deposition</title>
+<title>Coffee Ring Effect: evaporation-driven particle deposition</title>
 <style>
   body { margin: 0; font: 14px/1.5 -apple-system, "Helvetica Neue", sans-serif; background: #f6f1e5; color: #4a3b2a; }
   header { padding: 1.2rem 2rem 0; display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap; }
@@ -16,8 +16,18 @@
   .controls input[type=range] { width: 8.5rem; accent-color: #8a6b3f; }
   .controls input[type=range]:disabled { opacity: .35; }
   .controls output { font-variant-numeric: tabular-nums; min-width: 3.2rem; }
-  p.note { padding: 0 2rem; max-width: 62rem; color: #6b5b44; }
+  .ctl { position: relative; display: flex; align-items: center; gap: .35rem; }
+  button.help { width: 1.2rem; height: 1.2rem; padding: 0; border-radius: 50%; font-size: .72rem; line-height: 1; color: #8a7a60; }
+  button.help[aria-expanded=true] { background: #f3ecda; color: #4a3b2a; }
+  .tip { position: absolute; top: calc(100% + .45rem); left: 0; z-index: 5; width: 24rem; max-width: calc(100vw - 4rem); padding: .65rem .8rem; background: #fffdf7; border: 1px solid #d9cbb0; border-radius: 6px; box-shadow: 0 6px 18px rgba(74,59,42,.16); font-size: .82rem; line-height: 1.5; color: #6b5b44; }
+  .ctl:last-child .tip { left: auto; right: 0; }
+  .tip[hidden] { display: none; }
+  .hint { font-size: .78rem; color: #8a7a60; }
+  p.note { padding: 0 2rem .2rem; max-width: 62rem; color: #6b5b44; }
   main { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; padding: 1rem 2rem 3rem; }
+  /* Cap at 4 so the 12 stains always fill whole rows; below this the auto-fill
+     count is already a divisor of 12. */
+  @media (min-width: 1360px) { main { grid-template-columns: repeat(4, 1fr); } }
   figure { margin: 0; background: #fffdf7; border: 1px solid #e4d9c2; border-radius: 8px; padding: .6rem; }
   canvas { width: 100%; height: auto; display: block; cursor: pointer; }
   figcaption { font-size: .78rem; color: #8a7a60; text-align: center; padding-top: .4rem; font-variant-numeric: tabular-nums; }
@@ -25,44 +35,99 @@
 </head>
 <body>
 <header>
-  <h1>coffee rings — evaporation-driven particle deposition</h1>
+  <h1>Coffee Ring Effect: evaporation-driven particle deposition</h1>
   <button id="rebrew">brew a fresh batch</button>
+  <span class="hint">click any single stain to re-brew just that one</span>
 </header>
 <div class="controls">
-  <label>type
-    <select id="type">
-      <option value="auto">auto</option>
-      <option value="drop">drop</option>
-      <option value="mug">mug</option>
-    </select>
-  </label>
-  <label><input type="checkbox" id="weAuto" checked> impact We
-    <input type="range" id="we" min="0" max="100" value="70">
-    <output id="weOut"></output>
-  </label>
-  <label><input type="checkbox" id="phiAuto" checked> φ
-    <input type="range" id="phi" min="0" max="100" value="50">
-    <output id="phiOut"></output>
-  </label>
-  <label>stain size
-    <input type="range" id="frac" min="14" max="26" value="26">
-    <output id="fracOut"></output>
-  </label>
+  <span class="ctl">
+    <label>type
+      <select id="type">
+        <option value="auto">auto</option>
+        <option value="drop">drop</option>
+        <option value="mug">mug</option>
+      </select>
+    </label>
+    <button class="help" type="button" aria-controls="help-type" aria-expanded="false" aria-label="what does type do?">?</button>
+    <div class="tip" id="help-type" hidden>
+      Which kind of stain to draw. A drop is liquid spilled straight onto the
+      surface, drying as a filled disk. A mug is the ring left under a cup, where
+      the liquid sits only in the band beneath the rim and the middle of the
+      footprint never gets wet. Auto picks one at random for each stain.
+    </div>
+  </span>
+  <span class="ctl">
+    <label><input type="checkbox" id="weAuto" checked> impact We
+      <input type="range" id="we" min="0" max="100" value="70">
+      <output id="weOut"></output>
+    </label>
+    <button class="help" type="button" aria-controls="help-we" aria-expanded="false" aria-label="what does impact We do?">?</button>
+    <div class="tip" id="help-we" hidden>
+      How hard the liquid hit the surface, given as a Weber number: the impact
+      energy divided by the surface tension holding the drop together. Down at
+      the low end the liquid settles quietly and dries where it landed. Raise it
+      and the edge buckles into fingers, and by a few hundred those fingers
+      throw off satellite droplets that dry as their own small rings. Tick the
+      box to let every stain draw its own value, untick it to hold them all at
+      the slider.
+    </div>
+  </span>
+  <span class="ctl">
+    <label><input type="checkbox" id="phiAuto" checked> φ
+      <input type="range" id="phi" min="0" max="100" value="50">
+      <output id="phiOut"></output>
+    </label>
+    <button class="help" type="button" aria-controls="help-phi" aria-expanded="false" aria-label="what does φ do?">?</button>
+    <div class="tip" id="help-phi" hidden>
+      How strong the coffee is: the fraction of the liquid's volume taken up by
+      solid particles. Weak coffee, at the left, runs out of particles before
+      the water is gone, so it dries to a thin broken ring with spokes and dots
+      strewn across the middle. Strong coffee, at the right, has enough to hold
+      the edge in place to the end and leaves a broad dark rim. Tick the box to
+      let every stain draw its own value, untick it to hold them all at the
+      slider.
+    </div>
+  </span>
+  <span class="ctl">
+    <label>stain size
+      <input type="range" id="frac" min="14" max="26" value="26">
+      <output id="fracOut"></output>
+    </label>
+    <button class="help" type="button" aria-controls="help-frac" aria-expanded="false" aria-label="what does stain size do?">?</button>
+    <div class="tip" id="help-frac" hidden>
+      How much of its tile the main stain fills. At the largest setting a hard
+      splash flings droplets past the edge of the tile and they get clipped, so
+      shrink the stain when you want to see a whole splatter.
+    </div>
+  </span>
 </div>
 <p class="note">
-  Each stain is a Monte-Carlo run of Deegan's coffee-ring physics: solute
-  particles advected by the outward capillary flow of a drying droplet whose
-  contact line is pinned, jamming where they reach it. One concentration knob
-  drives the morphology: the ring grows inward per the Appendix of Deegan's
-  2000 paper, depinning nucleates dry holes that arrest into arch scallops,
-  and severed drops leave nested inner rings. Dilute drops end in free
-  recession — radial spokes, stick-slip arcs, disorganized center dots.
-  Mug-bottom rings wick from a single drip: short reach makes a crescent,
-  long reach a full ring; a hard set-down splashes from the drip point.
-  Energetic spills finger into stars, eject satellites, and dot ligament
-  trails along the flight lines; the dilute ones dry ringless as specks.
-  Uncheck a box to pin impact energy or concentration; shrink the stain size
-  to give big splatters room. Click a stain to re-brew it.
+  Each stain is a drying puddle of coffee, simulated one particle at a time.
+  The edge of a real puddle sticks to the surface under it rather than
+  shrinking inward as it dries, and water evaporates fastest right at that
+  edge, so liquid flows outward from the middle to replace what is lost. The
+  flow carries the suspended coffee particles with it, and they pile up against
+  the edge and jam there. That is the coffee-ring effect, and this simulation follows the
+  equations Robert Deegan and colleagues worked out for it.
+</p>
+<p class="note">
+  How strong the coffee is, marked φ in the controls above, decides most of
+  what you see. A concentrated drop has enough particles to hold its edge in
+  place until the water is gone, and it dries to a broad dark rim around a
+  speckled middle. A dilute one runs short. Dry patches open along the rim, the
+  ring breaks into a row of scalloped arches, and eventually the edge tears
+  loose and retreats inward, printing a fainter ring wherever it pauses and
+  scattering spokes and stray dots across the center.
+</p>
+<p class="note">
+  A mug ring forms a different way. The liquid sits in a narrow band under the
+  cup's rim, fed by a single drip that ran down the side, so the middle of the
+  footprint stays dry. When that drip wets only part of the rim, the stain
+  comes out as a crescent instead of a closed ring. Setting the cup down hard,
+  or spilling from a height, flings liquid outward, and the rim breaks into
+  fingers with droplets flying off them to land as smaller rings of their own.
+  The smallest of those carry too few particles to build a rim and dry as flat
+  specks.
 </p>
 <main id="grid"></main>
 <script type="module">
@@ -119,7 +184,7 @@ const showValues = () => {
   $('phi').disabled = $('phiAuto').checked;
 };
 
-// Live numbers while dragging; re-render only on release (9 cells is slow).
+// Live numbers while dragging; re-render only on release (a full grid is slow).
 for (const id of ['we', 'phi', 'frac']) {
   $(id).addEventListener('input', showValues);
   $(id).addEventListener('change', redrawAll);
@@ -128,10 +193,33 @@ for (const id of ['type', 'weAuto', 'phiAuto']) {
   $(id).addEventListener('change', () => { showValues(); redrawAll(); });
 }
 
+// Help popovers: one open at a time, dismissed by Escape or a click elsewhere.
+const helpButtons = [...document.querySelectorAll('button.help')];
+const closeHelp = (keep) => {
+  for (const btn of helpButtons) {
+    if (btn === keep) continue;
+    $(btn.getAttribute('aria-controls')).hidden = true;
+    btn.setAttribute('aria-expanded', 'false');
+  }
+};
+for (const btn of helpButtons) {
+  const tip = $(btn.getAttribute('aria-controls'));
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const opening = tip.hidden;
+    closeHelp(btn);
+    tip.hidden = !opening;
+    btn.setAttribute('aria-expanded', String(opening));
+  });
+  tip.addEventListener('click', (e) => e.stopPropagation());
+}
+document.addEventListener('click', () => closeHelp(null));
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeHelp(null); });
+
 const brew = () => {
   grid.replaceChildren();
   cells.length = 0;
-  for (let i = 0; i < 9; i++) grid.append(makeCell(randomSeed()));
+  for (let i = 0; i < 12; i++) grid.append(makeCell(randomSeed()));
   redrawAll();
 };
 document.getElementById('rebrew').addEventListener('click', brew);

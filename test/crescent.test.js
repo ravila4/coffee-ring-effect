@@ -4,7 +4,7 @@ import { makeSupplySampler, widthFactor, simulateRing } from '../src/physics.js'
 import { buildStain } from '../src/render.js';
 import { makeRng } from '../src/rng.js';
 
-// A drip at the cup rim wicks along the rim-table channel with finite volume:
+// A drip at the cup rim wicks along the rim-surface channel with finite volume:
 // smooth thick lobe at the origin, sharp tips, dry far side.
 
 const arcDist = (a, b) => {

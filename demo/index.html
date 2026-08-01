@@ -182,7 +182,7 @@ const params = () => ({
   particles: 12000,
   darkField: $('dark').checked,
   ...($('weAuto').checked ? {} : { splashEnergy: weFrom($('we').value) }),
-  ...($('phiAuto').checked ? {} : { dropOverrides: { phi: phiFrom($('phi').value) } }),
+  ...($('phiAuto').checked ? {} : { phi: phiFrom($('phi').value) }),
 });
 
 const cells = [];

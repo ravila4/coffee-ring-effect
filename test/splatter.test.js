@@ -148,7 +148,7 @@ test('dilute splashes make speck-only satellites: no satellite washes', () => {
     particles: 600,
     type: 'drop',
     splashEnergy: 350,
-    dropOverrides: { phi: 0.0006 },
+    phi: 0.0006,
   });
   assert.equal(stain.washes.length, 1, `expected parent wash only, got ${stain.washes.length}`);
 });
@@ -160,7 +160,7 @@ test('concentrated splashes ring their satellites (washes appear)', () => {
     particles: 600,
     type: 'drop',
     splashEnergy: 350,
-    dropOverrides: { phi: 0.03 },
+    phi: 0.03,
   });
   assert.ok(stain.washes.length > 1, 'no ringed satellites at high phi');
 });

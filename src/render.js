@@ -139,8 +139,9 @@ export function buildStain({
   type = 'auto', // 'drop' | 'mug' | 'auto'
   partialChance = 0.55,
   mugChance = 0.5,
-  overlapChance = 0.45,
-  mugSupply = null, // {originTheta, arcHalfLength, falloff} override for tests/art
+  overlapChance = 0.2,
+  multiDripChance = 0.25,
+  mugSupply = null, // lobe list [{originTheta, arcHalfLength, falloff, weight}] override for tests/art
   splashEnergy = null, // Weber-number stand-in; continuous draw when null
   canvasBound = DEFAULT_BOUND, // clip radius in units of the parent radius
   dropOverrides = {},
@@ -161,18 +162,40 @@ export function buildStain({
   const splats = [];
   const washes = [];
   const stainType = type === 'auto' ? (rng.random() < mugChance ? 'mug' : 'drop') : type;
-  // One drip event per stain: overlap placements share the supply origin and
-  // reach with small jitter (the cup was set down twice, the drip only
-  // happened once). Reach is log-spread: short = crescent, L ≫ π reads as
-  // a uniform ring (L = π would still zero at the antipode).
-  const supply =
-    stainType === 'mug'
-      ? (mugSupply ?? {
-          originTheta: rng.uniform(0, 2 * Math.PI),
-          arcHalfLength: Math.PI * Math.exp(rng.uniform(Math.log(0.55), Math.log(4))),
-          falloff: rng.uniform(0.8, 1.6),
-        })
-      : null;
+  // One drip event per stain: overlap placements share the supply with
+  // small jitter (the cup was set down twice, the drip only happened once).
+  // The coffee may run down the rim at more than one point, though — each
+  // stream is a lobe with its own volume (weight). Splitting conserves the
+  // coffee: with more streams each carries less and runs shorter, so
+  // multi-drip lobes usually stay disjoint (a disconnected donut), merging
+  // into a lopsided ring only when they happen to touch. Reach is
+  // log-spread: short = crescent; a single lobe with L ≫ π reads as a
+  // uniform ring (L = π would still zero at the antipode).
+  const drawSupplyLobes = () => {
+    const origin = rng.uniform(0, 2 * Math.PI);
+    const drips = rng.random() < multiDripChance ? 2 + rng.int(2) : 1;
+    const reach = (lo, hi) => Math.PI * Math.exp(rng.uniform(Math.log(lo), Math.log(hi)));
+    const lobes = [
+      {
+        originTheta: origin,
+        arcHalfLength: drips === 1 ? reach(0.55, 4) : reach(0.3, 1.1),
+        falloff: rng.uniform(0.8, 1.6),
+        weight: 1,
+      },
+    ];
+    // Extra drips spread around the rim (evenly spaced plus jitter, so two
+    // drips face each other) and carry less coffee than the primary.
+    for (let j = 1; j < drips; j++) {
+      lobes.push({
+        originTheta: origin + j * ((2 * Math.PI) / drips) + rng.gaussian() * 0.45,
+        arcHalfLength: reach(0.15, 0.6),
+        falloff: rng.uniform(0.8, 1.6),
+        weight: Math.exp(rng.uniform(Math.log(0.15), Math.log(0.7))),
+      });
+    }
+    return lobes;
+  };
+  const supply = stainType === 'mug' ? (mugSupply ?? drawSupplyLobes()) : null;
   const splatBase = Math.max(0.8, radius * 0.016);
   // One liquid per stain: parent and satellites share the concentration.
   // Log-uniform — φ is a scale parameter and the low decades carry the sparse
@@ -185,9 +208,9 @@ export function buildStain({
   const mugHalfWidth = stainType === 'mug' ? radius * rng.uniform(0.1, 0.16) : 0;
   const placements =
     stainType === 'mug' && rng.random() < overlapChance ? 2 + rng.int(2) : 1;
-  // A mug's splash happened as the cup came down, at the same rim point the
-  // drip ran from — so the splash direction is the drip origin.
-  const splashDir = stainType === 'mug' ? supply.originTheta : splashRng.uniform(0, 2 * Math.PI);
+  // A mug's splash happened as the cup came down, at the rim point of first
+  // contact — the primary drip. Extra lobes just wet, no impact.
+  const splashDir = stainType === 'mug' ? supply[0].originTheta : splashRng.uniform(0, 2 * Math.PI);
   // Impact energy: set-downs are mostly gentle, but a hard one splashes;
   // a spilled drop can always splash. Always drawn, same as φ.
   const weDraw =
@@ -412,11 +435,11 @@ export function buildStain({
         supply:
           k === 0
             ? supply
-            : {
-                originTheta: supply.originTheta + rng.gaussian() * 0.06,
-                arcHalfLength: supply.arcHalfLength * rng.uniform(0.94, 1.06),
-                falloff: supply.falloff,
-              },
+            : supply.map((lobe) => ({
+                ...lobe,
+                originTheta: lobe.originTheta + rng.gaussian() * 0.06,
+                arcHalfLength: lobe.arcHalfLength * rng.uniform(0.94, 1.06),
+              })),
         spikes: k === 0 ? bandSpikes : null,
         overrides: k === 0 ? dropOverrides : {},
       });
@@ -506,6 +529,7 @@ export function buildStain({
     seed,
     type: stainType,
     phi: stainPhi,
+    supply,
     splashEnergy: We,
     splashDir,
     fingerAzimuths,

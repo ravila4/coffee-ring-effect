@@ -829,49 +829,63 @@ export function simulateDrop(options) {
   return { deposits: sim.deposits, events: sim.events };
 }
 
-// Supply profile for a rim drip: finite volume wicking both ways along the
-// channel between the cup rim and the surface. Compact support with a smooth
-// maximum at the drip (finite-volume corner spreading — a Barenblatt-type
-// similarity profile, not Washburn's infinite-reservoir law, and not
-// linear-in-s, which would cusp):
-// m(θ) = max(0, 1 − (s/L)²)^γ with s the arc distance from the origin.
-// The sampler normalizes total mass automatically (every particle lands in
-// the wetted arc), so a shorter reach concentrates the same volume — thicker,
-// darker near the drip. relDensityAt is mass density relative to a uniform
-// ring; L ≫ π reads as uniform.
-export function makeSupplySampler({ originTheta = 0, arcHalfLength = Math.PI, falloff = 1 } = {}) {
-  const L = arcHalfLength;
-  const origin = wrap(originTheta);
+// Supply profile for rim drips: each drip is a finite volume wicking both
+// ways along the channel between the cup rim and the surface. Compact
+// support with a smooth maximum at the drip (finite-volume corner spreading
+// — a Barenblatt-type similarity profile, not Washburn's infinite-reservoir
+// law, and not linear-in-s, which would cusp):
+// m(θ) = Σ_k w_k · max(0, 1 − (s_k/L_k)²)^γ_k with s_k the arc distance
+// from lobe k's origin and w_k its volume scale. Lobes that touch merge
+// (masses add); lobes that don't leave dry gaps between them. The sampler
+// normalizes total mass automatically (every particle lands in a wetted
+// arc), so a shorter reach concentrates the same volume — thicker, darker
+// near the drip. relDensityAt is mass density relative to a uniform ring;
+// a single lobe with L ≫ π reads as uniform.
+export function makeSupplySampler(lobes = [{}]) {
+  const parsed = lobes.map(
+    ({ originTheta = 0, arcHalfLength = Math.PI, falloff = 1, weight = 1 }) => ({
+      origin: wrap(originTheta),
+      L: arcHalfLength,
+      falloff,
+      weight,
+    }),
+  );
   const massAt = (theta) => {
-    let s = Math.abs(wrap(theta) - origin);
-    if (s > Math.PI) s = TWO_PI - s;
-    if (s >= L) return 0;
-    const u = 1 - (s / L) * (s / L);
-    return Math.pow(u, falloff);
+    let m = 0;
+    for (const lobe of parsed) {
+      let s = Math.abs(wrap(theta) - lobe.origin);
+      if (s > Math.PI) s = TWO_PI - s;
+      if (s >= lobe.L) continue;
+      const u = 1 - (s / lobe.L) * (s / lobe.L);
+      m += lobe.weight * Math.pow(u, lobe.falloff);
+    }
+    return m;
   };
-  const N = 512;
-  const span = Math.min(L, Math.PI);
+  // The CDF grid spans the whole circle: lobes can sit anywhere on the rim.
+  const N = 2048;
   const cdf = new Float64Array(N + 1);
   for (let k = 0; k < N; k++) {
-    const theta = origin - span + ((k + 0.5) / N) * 2 * span;
+    const theta = ((k + 0.5) / N) * TWO_PI;
     cdf[k + 1] = cdf[k] + massAt(theta);
   }
   const total = cdf[N];
-  const integral = total * ((2 * span) / N);
+  const integral = total * (TWO_PI / N);
   const relDensityAt = (theta) => (massAt(theta) * TWO_PI) / integral;
   const sample = (rng) => {
     const target = rng.random() * total;
+    // First bin with cdf[k+1] > target: zero-mass bins (flat cdf) can never
+    // be selected, so samples always land inside a wetted arc.
     let lo = 0;
     let hi = N - 1;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
-      if (cdf[mid + 1] < target) lo = mid + 1;
+      if (cdf[mid + 1] <= target) lo = mid + 1;
       else hi = mid;
     }
     const frac = (target - cdf[lo]) / (cdf[lo + 1] - cdf[lo] || 1);
-    return origin - span + ((lo + frac) / N) * 2 * span;
+    return ((lo + frac) / N) * TWO_PI;
   };
-  return { massAt, relDensityAt, sample, originTheta: origin, arcHalfLength };
+  return { massAt, relDensityAt, sample };
 }
 
 // Band width from local supply density: V_r = πRw²θc, so deposited mass per

@@ -220,7 +220,7 @@ test('mug splash rides the drip origin', () => {
     type: 'mug',
     overlapChance: 0,
     splashEnergy: 300,
-    mugSupply: { originTheta: 2.2, arcHalfLength: 0.9 * Math.PI, falloff: 1 },
+    mugSupply: [{ originTheta: 2.2, arcHalfLength: 0.9 * Math.PI, falloff: 1 }],
   });
   assert.equal(stain.splashDir, 2.2);
   assert.ok(stain.fingerAzimuths.length >= 2, 'mug at We 300 must finger');
@@ -253,7 +253,7 @@ test('the splash bulges the band outer edge at the drip azimuth', () => {
     overlapChance: 0,
     partialChance: 0,
     splashEnergy: 300,
-    mugSupply: { originTheta: 0, arcHalfLength: 4 * Math.PI, falloff: 1 },
+    mugSupply: [{ originTheta: 0, arcHalfLength: 4 * Math.PI, falloff: 1 }],
   });
   const near = [];
   const far = [];

@@ -13,7 +13,7 @@ const arcDist = (a, b) => {
 };
 
 test('supply mass peaks smoothly at the drip and vanishes beyond the reach', () => {
-  const s = makeSupplySampler({ originTheta: 1, arcHalfLength: 0.6 * Math.PI, falloff: 1 });
+  const s = makeSupplySampler([{ originTheta: 1, arcHalfLength: 0.6 * Math.PI, falloff: 1 }]);
   assert.equal(s.massAt(1), 1);
   // Smooth maximum, not a cusp: near-origin mass stays near 1.
   assert.ok(s.massAt(1.1) > 0.95);
@@ -28,7 +28,7 @@ test('supply mass peaks smoothly at the drip and vanishes beyond the reach', () 
 });
 
 test('sampled azimuths reproduce the supply profile', () => {
-  const s = makeSupplySampler({ originTheta: 0, arcHalfLength: 0.7 * Math.PI, falloff: 1.2 });
+  const s = makeSupplySampler([{ originTheta: 0, arcHalfLength: 0.7 * Math.PI, falloff: 1.2 }]);
   const rng = makeRng(401);
   const bins = new Float64Array(24);
   const n = 20000;
@@ -55,8 +55,8 @@ test('sampled azimuths reproduce the supply profile', () => {
 });
 
 test('a shorter reach concentrates the same mass: denser at the origin', () => {
-  const short = makeSupplySampler({ originTheta: 0, arcHalfLength: 0.5 * Math.PI, falloff: 1 });
-  const long = makeSupplySampler({ originTheta: 0, arcHalfLength: 3 * Math.PI, falloff: 1 });
+  const short = makeSupplySampler([{ originTheta: 0, arcHalfLength: 0.5 * Math.PI, falloff: 1 }]);
+  const long = makeSupplySampler([{ originTheta: 0, arcHalfLength: 3 * Math.PI, falloff: 1 }]);
   assert.ok(short.relDensityAt(0) > 1.5 * long.relDensityAt(0), 'short crescent not denser');
   // A very long reach reads as a uniform ring.
   assert.ok(Math.abs(long.relDensityAt(0) - 1) < 0.15);
@@ -72,7 +72,7 @@ test('band width couples as the square root of local density', () => {
 });
 
 test('the supply gap collects no deposits at all', () => {
-  const s = makeSupplySampler({ originTheta: 0, arcHalfLength: 0.5 * Math.PI, falloff: 1 });
+  const s = makeSupplySampler([{ originTheta: 0, arcHalfLength: 0.5 * Math.PI, falloff: 1 }]);
   const { deposits } = simulateBand({
     particles: 2500,
     rng: makeRng(402),
@@ -84,7 +84,7 @@ test('the supply gap collects no deposits at all', () => {
 });
 
 test('band mass decays with arc distance from the drip', () => {
-  const s = makeSupplySampler({ originTheta: 0, arcHalfLength: 0.8 * Math.PI, falloff: 1 });
+  const s = makeSupplySampler([{ originTheta: 0, arcHalfLength: 0.8 * Math.PI, falloff: 1 }]);
   const { deposits } = simulateBand({
     particles: 3000,
     rng: makeRng(403),
@@ -100,7 +100,7 @@ test('band mass decays with arc distance from the drip', () => {
 
 test('crescent sampling is deterministic per seed', () => {
   const mk = () => {
-    const s = makeSupplySampler({ originTheta: 2, arcHalfLength: 0.6 * Math.PI, falloff: 1.1 });
+    const s = makeSupplySampler([{ originTheta: 2, arcHalfLength: 0.6 * Math.PI, falloff: 1.1 }]);
     return simulateBand({ particles: 400, rng: makeRng(404), sampleTheta: (rng) => s.sample(rng) });
   };
   assert.deepEqual(mk().deposits, mk().deposits);
@@ -114,7 +114,7 @@ test('the wash polygon collapses in the supply gap', () => {
     type: 'mug',
     partialChance: 0,
     overlapChance: 0,
-    mugSupply: { originTheta: 0, arcHalfLength: 0.6 * Math.PI, falloff: 1 },
+    mugSupply: [{ originTheta: 0, arcHalfLength: 0.6 * Math.PI, falloff: 1 }],
   });
   const wash = stain.washes[0];
   assert.ok(wash.holePoints, 'mug wash must be an annulus');

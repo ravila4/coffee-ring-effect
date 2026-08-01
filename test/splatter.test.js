@@ -12,7 +12,7 @@ import {
   splatStyleFor,
   trailSpecsFor,
   DEFAULT_RADIUS_FRACTION,
-} from '../src/render.js';
+} from '../src/stain.js';
 
 const noise2D = createNoise2D(mulberry32(1));
 const midRng = { uniform: (a, b) => (a + b) / 2, random: () => 0.5, int: (n) => n >> 1, gaussian: () => 0 };

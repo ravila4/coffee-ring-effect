@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeSupplySampler, widthFactor, simulateBand } from '../src/physics.js';
-import { buildStain } from '../src/render.js';
+import { buildStain } from '../src/stain.js';
 import { makeRng } from '../src/rng.js';
 import { circDist } from './helpers.js';
 

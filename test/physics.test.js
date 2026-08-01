@@ -14,8 +14,7 @@ import {
   makeAnchorField,
 } from '../src/physics.js';
 import { makeRng } from '../src/rng.js';
-
-const normalizeTheta = (theta) => ((theta % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+import { normalizeTheta, circDist } from './helpers.js';
 
 test('radial velocity vanishes at the drop center', () => {
   assert.equal(radialVelocity(0, 0), 0);
@@ -484,11 +483,6 @@ test('interior sink is a genuine mixture in the mixed zone', () => {
   for (let i = 0; i < 200; i++) seen.add(chooseInteriorSink(0.12, rng));
   assert.ok(seen.has('arc') && seen.has('spoke'), `mixed zone gave only ${[...seen]}`);
 });
-
-const circDist = (a, b) => {
-  let off = Math.abs(normalizeTheta(a) - normalizeTheta(b));
-  return off > Math.PI ? 2 * Math.PI - off : off;
-};
 
 test('spoke-forced interior clusters deposits on the live cusp azimuths', () => {
   const rng = makeRng(302);

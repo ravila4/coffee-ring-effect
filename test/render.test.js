@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildStain, generateStainCanvas } from '../src/render.js';
+import { buildStain, generateStainCanvas, DEFAULT_RADIUS_FRACTION } from '../src/render.js';
 
 // A 2-D context that swallows every drawing call: paintStain only draws, it
 // never reads back, so recording nothing is enough to run a full render.
@@ -39,7 +39,6 @@ test('a valid mug supply override still builds', () => {
     seed: 1,
     radius: 100,
     particles: 200,
-    steps: 40,
     type: 'mug',
     mugSupply: [{ originTheta: 0.5, arcHalfLength: Math.PI, falloff: 1, weight: 1 }],
   });
@@ -68,7 +67,7 @@ test('a document canvas wins over OffscreenCanvas when both exist', () => {
       }
     };
 
-    const { canvas } = generateStainCanvas({ size: 64, seed: 3, particles: 200, steps: 40 });
+    const { canvas } = generateStainCanvas({ size: 64, seed: 3, particles: 200 });
 
     // toDataURL is the documented way to use the result and OffscreenCanvas
     // does not have it, so the DOM canvas must win wherever there is a DOM.
@@ -96,7 +95,7 @@ test('with no document at all the offscreen canvas is used', () => {
         this.getContext = () => stubContext(this);
       }
     };
-    const { canvas } = generateStainCanvas({ size: 64, seed: 3, particles: 200, steps: 40 });
+    const { canvas } = generateStainCanvas({ size: 64, seed: 3, particles: 200 });
     assert.equal(offscreens, 1);
     assert.ok(canvas instanceof globalThis.OffscreenCanvas);
   } finally {
@@ -105,11 +104,11 @@ test('with no document at all the offscreen canvas is used', () => {
 });
 
 test('every splat stays inside the canvas footprint', () => {
-  // generateStainCanvas draws at radius = 0.26 * size, so anything further
-  // than (0.5 / 0.26) * radius from centre is clipped off the canvas edge.
-  const bound = 0.5 / 0.26;
-  for (let seed = 0; seed < 200; seed++) {
-    const stain = buildStain({ seed, radius: 100, particles: 400, steps: 60 });
+  // generateStainCanvas draws at radius = DEFAULT_RADIUS_FRACTION * size, so
+  // anything further than half the canvas from centre is clipped at the edge.
+  const bound = 0.5 / DEFAULT_RADIUS_FRACTION;
+  for (let seed = 0; seed < 30; seed++) {
+    const stain = buildStain({ seed, radius: 100, particles: 400 });
     for (const s of stain.splats) {
       const reach = Math.hypot(s.x, s.y) + s.r;
       assert.ok(

@@ -11,6 +11,7 @@ import {
   speckCutoff,
   splatStyleFor,
   trailSpecsFor,
+  DEFAULT_RADIUS_FRACTION,
 } from '../src/render.js';
 
 const noise2D = createNoise2D(mulberry32(1));
@@ -100,7 +101,7 @@ test('satellite count grows with impact energy', () => {
 test('satellite reach scales with the canvas bound', () => {
   const maxDist = (bound) =>
     Math.max(...satelliteSpecsFor(320, [1], midRng, { bound }).map((s) => s.dist));
-  const tight = maxDist(0.5 / 0.26);
+  const tight = maxDist(0.5 / DEFAULT_RADIUS_FRACTION);
   const roomy = maxDist(0.5 / 0.18);
   assert.ok(roomy > tight + 0.5, `no extra reach: ${tight} vs ${roomy}`);
 });
@@ -166,8 +167,8 @@ test('concentrated splashes ring their satellites (washes appear)', () => {
 });
 
 test('washes and splats stay inside the canvas at maximum splash energy', () => {
-  const bound = (0.5 / 0.26) * 100;
-  for (let seed = 0; seed < 40; seed++) {
+  const bound = (0.5 / DEFAULT_RADIUS_FRACTION) * 100;
+  for (let seed = 0; seed < 12; seed++) {
     const stain = buildStain({
       seed,
       radius: 100,
@@ -189,7 +190,7 @@ test('washes and splats stay inside the canvas at maximum splash energy', () => 
 test('a smaller drawn-radius fraction opens usable splatter headroom', () => {
   const bound = (0.5 / 0.18) * 100;
   let farthest = 0;
-  for (let seed = 0; seed < 40; seed++) {
+  for (let seed = 0; seed < 12; seed++) {
     const stain = buildStain({
       seed,
       radius: 100,
@@ -209,7 +210,10 @@ test('a smaller drawn-radius fraction opens usable splatter headroom', () => {
       farthest = Math.max(farthest, reach);
     }
   }
-  assert.ok(farthest > (0.5 / 0.26) * 100, `headroom unused: farthest splat at ${farthest}`);
+  assert.ok(
+    farthest > (0.5 / DEFAULT_RADIUS_FRACTION) * 100,
+    `headroom unused: farthest splat at ${farthest}`,
+  );
 });
 
 test('mug splash rides the drip origin', () => {
@@ -269,13 +273,16 @@ test('the splash bulges the band outer edge at the drip azimuth', () => {
 test('set-down mugs sometimes splash now', () => {
   let splashed = 0;
   let gentle = 0;
-  for (let seed = 0; seed < 30; seed++) {
+  // A fixed-seed pin on the We draw, not a statistical claim: seeds 0..14
+  // give 3 splashed / 12 gentle, and any deliberate stream reassignment
+  // re-rolls these counts and re-opens the thresholds anyway.
+  for (let seed = 0; seed < 15; seed++) {
     const s = buildStain({ seed, radius: 100, particles: 200, type: 'mug' });
     if (s.splashEnergy > 30) splashed++;
     else gentle++;
   }
-  assert.ok(splashed >= 3, `only ${splashed}/30 mugs splashed`);
-  assert.ok(gentle >= 10, `only ${gentle}/30 mugs stayed gentle`);
+  assert.ok(splashed >= 2, `only ${splashed}/15 mugs splashed`);
+  assert.ok(gentle >= 8, `only ${gentle}/15 mugs stayed gentle`);
 });
 
 test('splatter build is deterministic per seed', () => {

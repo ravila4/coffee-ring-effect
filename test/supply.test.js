@@ -3,15 +3,11 @@ import assert from 'node:assert/strict';
 import { makeSupplySampler } from '../src/physics.js';
 import { buildStain } from '../src/render.js';
 import { makeRng } from '../src/rng.js';
+import { circDist } from './helpers.js';
 
 // The drip may run down the rim at more than one point. Each stream carries
 // its own volume (weight), so the supply is a list of lobes: big and small
 // arcs that merge where they touch and leave dry gaps where they don't.
-
-const arcDist = (a, b) => {
-  let d = Math.abs((((a - b) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI));
-  return d > Math.PI ? 2 * Math.PI - d : d;
-};
 
 const TWO_LOBES = [
   { originTheta: 0, arcHalfLength: 0.4 * Math.PI, falloff: 1, weight: 1 },
@@ -45,8 +41,8 @@ test('samples split across lobes in proportion to their volumes', () => {
   let primary = 0;
   for (let i = 0; i < n; i++) {
     const theta = s.sample(rng);
-    const inA = arcDist(theta, 0) <= 0.4 * Math.PI + 0.004;
-    const inB = arcDist(theta, Math.PI) <= 0.4 * Math.PI + 0.004;
+    const inA = circDist(theta, 0) <= 0.4 * Math.PI + 0.004;
+    const inB = circDist(theta, Math.PI) <= 0.4 * Math.PI + 0.004;
     assert.ok(inA || inB, `sample ${theta} landed in a dry gap`);
     if (inA) primary++;
   }

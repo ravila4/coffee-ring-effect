@@ -805,6 +805,34 @@ test('mug-ring deposits stay within the band', () => {
   }
 });
 
+test('mug band edges stick-slip sector-wise: a broken second ridge inside weak sectors', () => {
+  const { deposits } = simulateRing({
+    particles: 4000,
+    rng: makeRng(210),
+    edgeSlip: { outer: { tDepin: 0.4, amp: 0.3 } },
+  });
+  const outer = deposits.filter((d) => d.pinned && d.u > 0);
+  const slipped = outer.filter((d) => d.u < 0.88 && d.u > 0.55);
+  assert.ok(
+    slipped.length / outer.length > 0.06,
+    `no second ridge inside the outer edge: ${slipped.length}/${outer.length}`,
+  );
+  // Sector-local, not a full circle: present in some azimuthal bins, absent
+  // in others.
+  const NB = 48;
+  const bins = new Set(
+    slipped.map((d) => Math.floor((normalizeTheta(d.theta) / (2 * Math.PI)) * NB)),
+  );
+  assert.ok(bins.size >= 6 && bins.size <= NB - 6, `slipped ridge occupies ${bins.size}/${NB} bins`);
+  // The inner edge was not told to slip: single ridge, nothing mid-band.
+  const inner = deposits.filter((d) => d.pinned && d.u < 0);
+  const innerLow = inner.filter((d) => d.u > -0.88 && d.u < -0.55);
+  assert.ok(
+    innerLow.length / inner.length < 0.03,
+    `inner edge slipped unbidden: ${innerLow.length}/${inner.length}`,
+  );
+});
+
 test('mug-ring sim is deterministic for a given seed', () => {
   const a = simulateRing({ particles: 300, rng: makeRng(204) });
   const b = simulateRing({ particles: 300, rng: makeRng(204) });

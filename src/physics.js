@@ -831,6 +831,7 @@ export function simulateRing({
   ringWidth = 0.05,
   sampleTheta = null, // rng → θ; supply profile for crescents (default uniform)
   pinningAt = null,
+  edgeSlip = null, // test override: {outer?, inner?} with {tDepin, amp}; null = auto draw
   rng,
 } = {}) {
   if (!rng) throw new Error('simulateRing requires a seeded rng');
@@ -843,6 +844,34 @@ export function simulateRing({
     theta[i] = sampleTheta ? sampleTheta(rng) : rng.uniform(0, 2 * Math.PI);
   }
 
+  // Band edges stick-slip like the drop's contact line: an edge may depin
+  // once, sector-wise — strong-anchor sectors hold the original line while
+  // weak sectors step into the band and re-pin, leaving a broken parallel
+  // ridge (real mug rings show doubled edges in arcs). One event per edge:
+  // the band is thin, its hysteresis budget is spent in a single slip.
+  const autoSlip = () => {
+    const roll = rng.random();
+    const slip = {
+      field: makeAnchorField(rng, 256),
+      tDepin: rng.uniform(0.45, 0.8) * tEnd,
+      amp: rng.uniform(0.12, 0.3),
+    };
+    return roll < 0.65 ? slip : null;
+  };
+  const slips = {
+    outer: edgeSlip === null ? autoSlip() : (edgeSlip.outer ?? null),
+    inner: edgeSlip === null ? autoSlip() : (edgeSlip.inner ?? null),
+  };
+  for (const s of [slips.outer, slips.inner]) {
+    if (s && !s.field) s.field = makeAnchorField(rng, 256);
+  }
+  const edgeAt = (side, th, t) => {
+    const slip = side > 0 ? slips.outer : slips.inner;
+    if (!slip || t < slip.tDepin) return 1;
+    const b = Math.floor((wrap(th) / TWO_PI) * slip.field.length);
+    return 1 - slip.amp * (1 - slip.field[b]);
+  };
+
   const deposits = [];
   const dt = tEnd / steps;
 
@@ -854,12 +883,13 @@ export function simulateRing({
       const dir = Math.sign(u[i]) || (rng.random() < 0.5 ? -1 : 1);
       const v = u[i] + dir * radialVelocity(Math.abs(u[i]), t) * dt + sigma * rng.gaussian();
       theta[i] += sigma * 0.3 * rng.gaussian();
-      if (Math.abs(v) >= 1) {
+      const edge = edgeAt(Math.sign(v) || dir, theta[i], t);
+      if (Math.abs(v) >= edge) {
         // Same temporal gate as the sessile drop: strength = hold fraction.
         if (!pinningAt || t < pinningAt(theta[i]) * tEnd) {
           alive[i] = 0;
           deposits.push({
-            u: Math.sign(v) * (1 - Math.abs(rng.gaussian()) * ringWidth),
+            u: Math.sign(v) * (edge - Math.abs(rng.gaussian()) * ringWidth),
             theta: theta[i],
             t,
             pinned: true,
@@ -868,7 +898,7 @@ export function simulateRing({
           // Receding arc: swept back into the band, sloshed along it. The
           // narrow band re-delivers particles to the edge quickly, so the
           // sweep-back and slosh are stronger than the sessile-drop case.
-          u[i] = Math.sign(v) * (1 - 0.15 - 0.25 * rng.random());
+          u[i] = Math.sign(v) * edge * (1 - 0.15 - 0.25 * rng.random());
           theta[i] += rng.gaussian() * 0.45;
         }
       } else {

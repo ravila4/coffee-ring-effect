@@ -112,7 +112,8 @@ test('multi-drip draw yields a big primary and smaller extras', () => {
 });
 
 // A lobe list that carries no coffee has no profile to sample: the CDF
-// normalizes by total mass, so these used to come back as silent NaN density.
+// normalizes by total mass, so these are rejected at construction rather than
+// left to come back as silent NaN density.
 
 test('a supply with no lobes is rejected', () => {
   assert.throws(() => makeSupplySampler([]), /lobe/);

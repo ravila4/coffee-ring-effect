@@ -93,7 +93,7 @@ test('arch angular width shrinks with concentration and stays floored', () => {
   assert.ok(holeAngularWidth(0.05) > 0, 'width must stay positive past the law zero');
 });
 
-// --- simulateDrop: the reworked API ---
+// --- simulateDrop: one call, run to dry-out ---
 
 test('every particle ends up deposited (mass conservation)', () => {
   const { deposits } = simulateDrop({ particles: 500, phi: 0.01, rng: makeRng(101) });
@@ -579,7 +579,7 @@ test('arc rest radii are local fragments, not a disk-wide ladder', () => {
   const arcs = deposits.filter((d) => d.sink === 'arc');
   assert.ok(arcs.length > 100, `too few arc deposits to judge: ${arcs.length}`);
   const centers = new Set(arcs.map((d) => Math.round(d.rho * 100)));
-  // The old ladder collapsed the disk onto ~10 shared levels; local
+  // A disk-wide ladder would collapse the disk onto ~10 shared levels; local
   // fragments put rest radii nearly everywhere.
   assert.ok(centers.size > 35, `${centers.size} levels — still a global ladder`);
 });

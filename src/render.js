@@ -335,8 +335,6 @@ export function buildStain({
     });
     for (const d of deposits) {
       const rr = d.rho * line.radiusAt(d.theta);
-      // No centerFade: the bullseye it papered over was the 1-D radial
-      // walk's 1/r pile-up, fixed in the sim itself.
       pushSplat(rng, cx + rr * Math.cos(d.theta), cy + rr * Math.sin(d.theta), d, shadeAt(d.theta));
     }
   };

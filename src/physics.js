@@ -53,7 +53,9 @@ export function makeRingGrowth({ phi }) {
         ((2 * phi) / PACKING) *
         (Math.pow(1 - Math.pow(1 - tau, 0.75), 1 / 3) / Math.pow(1 - tau, 0.25));
       const dxdtau = S / y;
-      x = Math.min(x + dxdtau * dtau, 3.999); // interface radius stays positive
+      // x = 4w/R, so holding x below 4 keeps the ring width under the drop
+      // radius and the interface radius R − w positive.
+      x = Math.min(x + dxdtau * dtau, 3.999);
       y += (1 - tau - y) * dxdtau * dtau;
       tau += dtau;
       if (1 - tau - y <= 0 || tau >= 1) done = true;
@@ -299,7 +301,7 @@ export function settleInterior({
   // Stick-slip rest arcs are local: a receding arc catches over a finite
   // angular window at a radius its neighbours don't share — Figs. 9/18 show
   // broken arcs and webs, hardly any closed inner ring. A disk-wide rest
-  // ladder here rendered as tree growth rings. Fragments are created lazily
+  // ladder renders as tree growth rings. Fragments are created lazily
   // by the sweep and reused by later particles landing within reach, so
   // arc coherence is per-sector, not per-circle.
   const arcCapture = 0.02 + 0.015 * rng.random();
@@ -316,9 +318,10 @@ export function settleInterior({
       }
     }
     if (!best) {
-      // Always seed a fragment: a creation coin flip made the realized
-      // arc/dot split a function of particle count (more particles → more
-      // joins → fewer silent dots), breaking "tracer count is resolution".
+      // Always seed a fragment: gating creation on a coin flip would make
+      // the realized arc/dot split a function of particle count (more
+      // particles → more joins → fewer silent dots), breaking "tracer count
+      // is resolution".
       // An isolated single-particle fragment reads as a dot anyway.
       // Fragment reach is a length in cross-section units, so on a band the
       // metric shrinks it to the same physical scale as the drop's arcs.
@@ -702,7 +705,7 @@ export function makeDropStepper({
 
     // Sector relief: weak-anchor sectors re-pinned deeper, strong sectors
     // caught slightly outside the mean. Centered on 1/2 so rNext stays the
-    // azimuthal MEAN catching radius — one-sided relief (1 − s) shifted
+    // azimuthal MEAN catching radius — one-sided relief (1 − s) would shift
     // every re-pinned ring inward by half the amplitude, silently re-tuning
     // the calibrated retreat draw. Applied after the sever test, which
     // measures hole coverage against the unrelieved base.
@@ -722,7 +725,7 @@ export function makeDropStepper({
       const interface_ = kb * (1 - w);
       // The D/rho term is the Itô drift of 2-D Brownian motion's radial
       // coordinate; without it the walk is 1-D-in-rho and piles a 1/r
-      // density spike at the centre (the old render hid it with centerFade).
+      // density spike at the centre — a bullseye no shading can hide.
       // A band's cross-section IS 1-D in u — no Jacobian drift — and its
       // midline is a circle, not a point: crossing reflects without the
       // antipodal θ flip a disk center demands.
@@ -744,7 +747,7 @@ export function makeDropStepper({
         // depinning pull (growing as the drop thins) exceeds its strength,
         // so strength reads as a hold time and weak arcs keep only the thin
         // early-time ring — gap edges taper instead of stepping. Strength
-        // maps to hold time linearly: steeper maps (strength², A/B-tested)
+        // maps to hold time linearly: steeper maps (strength², say)
         // release the moderate arcs that carry most of the rim and bleach
         // the ring wholesale.
         // Anchor strength is the fraction of the epoch a fence sector holds
@@ -957,7 +960,7 @@ export function widthFactor(relDensity) {
 // therefore inward for the outer half and outward for the inner half; the
 // annulus contracting in two directions is the mirror, not new physics.
 // The halves share the rng stream but not particles: each dries on its own
-// solute share (midline crossings were rare and inert in the old 1-D toy).
+// solute share (midline crossings are rare and inert).
 // All the φ physics — τ_d depinning, epochs, anchor fields, holes and
 // arches, interior sinks — runs per edge unchanged; `aspect` = w/R_mid
 // tells the stepper what a radian costs. The center of the cup's footprint

@@ -44,7 +44,7 @@ python3 -m http.server 8000      # then open http://localhost:8000/demo/
 
 ```js
 import { generateStainCanvas } from './src/render.js';
-const canvas = generateStainCanvas({ size: 560, seed: 42 });
+const { canvas } = generateStainCanvas({ size: 560, seed: 42 });
 el.style.backgroundImage = `url(${canvas.toDataURL()})`;
 ```
 

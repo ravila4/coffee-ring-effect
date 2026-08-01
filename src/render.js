@@ -146,6 +146,11 @@ export function buildStain({
   canvasBound = DEFAULT_BOUND, // clip radius in units of the parent radius
   dropOverrides = {},
 } = {}) {
+  // The primary lobe sets the splash azimuth, so the override is read before
+  // any sampler runs and an empty list has nothing to aim at.
+  if (mugSupply !== null && (!Array.isArray(mugSupply) || mugSupply.length === 0)) {
+    throw new TypeError('mugSupply must be a non-empty array of lobes');
+  }
   // Independent random streams, forked from the seed. The particle sims eat
   // a φ-dependent number of draws and a hard splash grows more fingers, so a
   // single shared stream would let one knob shift the draws behind every
@@ -589,11 +594,15 @@ export function generateStainCanvas({
   darkField = false,
   ...options
 } = {}) {
+  // A DOM canvas where there is a DOM: OffscreenCanvas has no toDataURL, so
+  // preferring it would break the documented "render once, keep the image"
+  // usage on the main thread. In a worker there is no document and the
+  // offscreen surface is the only option.
   const c =
     canvas ??
-    (typeof OffscreenCanvas !== 'undefined'
-      ? new OffscreenCanvas(size, size)
-      : document.createElement('canvas'));
+    (typeof document !== 'undefined'
+      ? document.createElement('canvas')
+      : new OffscreenCanvas(size, size));
   c.width = size;
   c.height = size;
   const stain = buildStain({

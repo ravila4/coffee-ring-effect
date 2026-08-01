@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   radialVelocity,
+  makeDropStepper,
   simulateDrop,
   simulateBand,
   buildKappaBins,
@@ -341,6 +342,27 @@ test('simulation is deterministic for a given seed', () => {
 
 test('simulation requires a seeded rng', () => {
   assert.throws(() => simulateDrop({ particles: 10 }));
+});
+
+// bandAspect is w/R_mid, a metric. Zero or negative has no geometry behind it
+// and only surfaces much later as a bad bin count.
+test('bandAspect must be null or a positive width-to-radius ratio', () => {
+  const opts = { particles: 20, steps: 5, rng: makeRng(1) };
+  for (const bad of [0, -0.12, NaN, Infinity, -Infinity]) {
+    assert.throws(
+      () => makeDropStepper({ ...opts, bandAspect: bad }),
+      /bandAspect/,
+      `bandAspect ${bad} was accepted`,
+    );
+  }
+});
+
+test('the disk sentinel and a real band aspect both build a stepper', () => {
+  const opts = { particles: 20, steps: 5, rng: makeRng(1) };
+  // null is the disk, not "no aspect given": it must survive the guard.
+  assert.equal(makeDropStepper({ ...opts, bandAspect: null }).aliveCount, 20);
+  assert.equal(makeDropStepper({ ...opts }).aliveCount, 20);
+  assert.equal(makeDropStepper({ ...opts, bandAspect: 0.12 }).aliveCount, 20);
 });
 
 test('unpinned sectors collect no jammed ring deposits (partial rings)', () => {

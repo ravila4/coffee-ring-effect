@@ -115,6 +115,42 @@ test('multi-drip draw yields a big primary and smaller extras', () => {
   }
 });
 
+// A lobe list that carries no coffee has no profile to sample: the CDF
+// normalizes by total mass, so these used to come back as silent NaN density.
+
+test('a supply with no lobes is rejected', () => {
+  assert.throws(() => makeSupplySampler([]), /lobe/);
+});
+
+test('lobe reach and volume must be finite and positive', () => {
+  for (const bad of [0, -1, NaN, Infinity]) {
+    assert.throws(
+      () => makeSupplySampler([{ originTheta: 0, arcHalfLength: bad, weight: 1 }]),
+      /arcHalfLength/,
+      `arcHalfLength ${bad} was accepted`,
+    );
+    assert.throws(
+      () => makeSupplySampler([{ originTheta: 0, arcHalfLength: 1, weight: bad }]),
+      /weight/,
+      `weight ${bad} was accepted`,
+    );
+  }
+});
+
+test('a supply too narrow to carry any mass is rejected', () => {
+  // Positive but far below the CDF grid spacing: every bin integrates to zero.
+  assert.throws(() => makeSupplySampler([{ originTheta: 0, arcHalfLength: 1e-6 }]), /mass/);
+});
+
+test('a valid supply still samples after the guards', () => {
+  const s = makeSupplySampler(TWO_LOBES);
+  assert.ok(s.relDensityAt(0) > 0);
+  const theta = s.sample(makeRng(9));
+  assert.ok(Number.isFinite(theta) && theta >= 0 && theta <= 2 * Math.PI);
+  // The documented default is a single uniform-ish lobe with no arguments.
+  assert.ok(makeSupplySampler().relDensityAt(0) > 0);
+});
+
 test('drops carry no drip supply', () => {
   const stain = buildStain({ seed: 41, radius: 100, particles: 300, type: 'drop' });
   assert.equal(stain.supply, null);

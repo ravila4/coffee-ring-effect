@@ -208,18 +208,34 @@ export function chooseInteriorSink(load, rng) {
 // is precomputed in radial slabs; spoke emission reads the live cusp set at
 // the particle's pickup radius.
 const FRONT_STEP = 0.02; // radial slab per cusp-evolution step
-export function traceCuspFront({ rho0, spacing, wander, rng }) {
+export function traceCuspFront({ rho0, spacing, wander, rng, aspect = null }) {
+  // Spacing is a length in stepper units. On a disk the front's
+  // circumference in those units shrinks with ρ, forcing merges; on a band
+  // the front recedes toward the midline circle, whose circumference is the
+  // constant 2π/aspect — band cusps never merge, they stay parallel ticks.
   let thetas = [];
-  const count0 = Math.max(3, Math.round((TWO_PI * rho0) / spacing));
+  const count0 = Math.max(
+    3,
+    Math.round(aspect ? TWO_PI / aspect / spacing : (TWO_PI * rho0) / spacing),
+  );
   const offset = rng.uniform(0, TWO_PI / count0);
   for (let k = 0; k < count0; k++) {
-    thetas.push(offset + (k / count0) * TWO_PI + rng.gaussian() * 0.15 * (spacing / rho0));
+    thetas.push(
+      offset +
+        (k / count0) * TWO_PI +
+        rng.gaussian() * 0.15 * (aspect ? spacing * aspect : spacing / rho0),
+    );
   }
   const levels = [{ rho: rho0, thetas: [...thetas] }];
   for (let rho = rho0 - FRONT_STEP; rho > 0; rho -= FRONT_STEP) {
-    const sigma = (wander * FRONT_STEP) / Math.max(rho, 0.12);
+    const sigma = aspect
+      ? wander * FRONT_STEP * aspect
+      : (wander * FRONT_STEP) / Math.max(rho, 0.12);
     thetas = thetas.map((th) => th + rng.gaussian() * sigma).sort((a, b) => wrap(a) - wrap(b));
-    const target = Math.max(3, Math.round((TWO_PI * rho) / spacing));
+    const target = Math.max(
+      3,
+      Math.round(aspect ? TWO_PI / aspect / spacing : (TWO_PI * rho) / spacing),
+    );
     while (thetas.length > target) {
       // Merge the closest adjacent pair (circularly): the two veins join.
       let best = 0;
@@ -267,6 +283,7 @@ export function settleInterior({
   forceSink = null,
   cuspSpacing = 0.06,
   cuspWander = 0.5,
+  aspect = null, // band metric: radians per stepper length unit
 }) {
   const sorted = [...items].sort((a, b) => b.rho - a.rho);
   if (sorted.length === 0) return { deposits: [], cuspLevels: [] };
@@ -296,13 +313,15 @@ export function settleInterior({
       // arc/dot split a function of particle count (more particles → more
       // joins → fewer silent dots), breaking "tracer count is resolution".
       // An isolated single-particle fragment reads as a dot anyway.
-      best = { rho: p.rho, theta: p.theta, halfWidth: rng.uniform(0.25, 0.8) };
+      // Fragment reach is a length in cross-section units, so on a band the
+      // metric shrinks it to the same physical scale as the drop's arcs.
+      best = { rho: p.rho, theta: p.theta, halfWidth: rng.uniform(0.25, 0.8) * (aspect ?? 1) };
       arcFragments.push(best);
     }
     return clamp01(best.rho + rng.gaussian() * 0.002);
   };
   const rho0 = Math.max(sorted[0].rho, 0.1);
-  const cuspLevels = traceCuspFront({ rho0, spacing: cuspSpacing, wander: cuspWander, rng });
+  const cuspLevels = traceCuspFront({ rho0, spacing: cuspSpacing, wander: cuspWander, rng, aspect });
   const levelAt = (rho) => {
     const k = Math.min(
       cuspLevels.length - 1,
@@ -386,6 +405,8 @@ export function makeDropStepper({
   holeSchedule = null,
   interiorSink = null, // test-only: force the recession-pass sink
   pinningAt = null, // θ → [0,1] strength, read as hold fraction of the drying
+  sampleTheta = null, // rng → θ; supply profile for crescents (default uniform)
+  bandAspect = null, // w/R_mid when this "drop" is one half of an annular band
   rng,
 } = {}) {
   if (!rng) throw new Error('makeDropStepper requires a seeded rng');
@@ -393,18 +414,34 @@ export function makeDropStepper({
   const dt = tEnd / steps;
   // Slosh diffusion normalized to the 300-step reference calibration.
   const sloshKick = 0.3 * Math.sqrt(dt / (0.98 / 300));
+  // The stepper is contour-independent: it thinks in (ρ, θ) with the contact
+  // line at ρ = 1. What a mug band changes is the metric, not the machinery.
+  // On a disk, ρ and θ share the drop-radius unit, so a physical length L on
+  // a line at radius r spans L/r radians. On one half of an annular band
+  // (mirrored about the band midline), the ρ-unit is the half-width w while
+  // a radian costs R_mid — and the azimuthal radius stays R_mid as the line
+  // recedes toward the midline — so the exchange rate is the constant aspect
+  // w/R_mid. Every law stays in stepper length units; only the conversion to
+  // radians branches.
+  const angPerLen = (r) => bandAspect ?? 1 / r;
+  // NBINS oversamples disk holes (0.02–0.07 rad), but band holes are ~aspect
+  // times narrower in angle; without more bins a hole spans no bin center,
+  // carves nothing, and severing can never trigger.
+  const nBins = bandAspect ? Math.round(NBINS / bandAspect) : NBINS;
   const rho = new Float64Array(particles);
   const theta = new Float64Array(particles);
   const alive = new Uint8Array(particles).fill(1);
   for (let i = 0; i < particles; i++) {
-    rho[i] = Math.sqrt(rng.random()); // uniform over the disk
-    theta[i] = rng.uniform(0, 2 * Math.PI);
+    // Disk: uniform over the area. Band: the cross-section is quasi-1-D
+    // (area element ∝ du), so uniform over the half-width.
+    rho[i] = bandAspect ? rng.random() : Math.sqrt(rng.random());
+    theta[i] = sampleTheta ? sampleTheta(rng) : rng.uniform(0, 2 * Math.PI);
   }
   let aliveCount = particles;
 
   const deposits = [];
   const events = [];
-  const depositMass = new Float64Array(NBINS);
+  const depositMass = new Float64Array(nBins);
 
   const forcedDepins = depinSchedule ? [...depinSchedule].sort((a, b) => a.t - b.t) : null;
   let nextForcedDepin = 0;
@@ -424,7 +461,7 @@ export function makeDropStepper({
     // epochs anchor sector-wise: weak sectors sit deeper (relief) and let go
     // partway through the epoch (the hold gate in the particle loop), so
     // inner fences come out as broken, wavy arcs instead of tree rings.
-    anchors: tStart === 0 ? null : makeAnchorField(rng, NBINS, parentAnchors),
+    anchors: tStart === 0 ? null : makeAnchorField(rng, nBins, parentAnchors),
     anchorRelief: tStart === 0 ? 0 : base * rng.uniform(0.04, 0.1),
     holes: [],
     tOnset: null,
@@ -440,11 +477,11 @@ export function makeDropStepper({
     // Nucleate where the realized ring is thinnest ("the thinnest portion of
     // the ring indicates where the first depinning event occurred"); before
     // any deposit exists, fall back to the weak-pinning arcs.
-    const weights = new Float64Array(NBINS);
+    const weights = new Float64Array(nBins);
     let anyMass = false;
-    for (let b = 0; b < NBINS; b++) if (depositMass[b] > 0) anyMass = true;
-    for (let b = 0; b < NBINS; b++) {
-      const thetaB = ((b + 0.5) / NBINS) * TWO_PI;
+    for (let b = 0; b < nBins; b++) if (depositMass[b] > 0) anyMass = true;
+    for (let b = 0; b < nBins; b++) {
+      const thetaB = ((b + 0.5) / nBins) * TWO_PI;
       weights[b] = anyMass
         ? 1 / (1 + depositMass[b])
         : pinningAt
@@ -452,7 +489,7 @@ export function makeDropStepper({
           : 1;
     }
     const bin = pickWeightedBin(weights, rng);
-    return ((bin + rng.random()) / NBINS) * TWO_PI;
+    return ((bin + rng.random()) / nBins) * TWO_PI;
   };
 
   const nucleate = (t, forced) => {
@@ -466,12 +503,18 @@ export function makeDropStepper({
         generation: 0,
       });
     } else {
+      // The Fig. 13 law gives arc length in stepper length units; the metric
+      // converts to radians last (band: constant aspect, no epoch.base).
       const arcOverR = holeAngularWidth(epoch.phiEff);
-      const halfWidth = ((arcOverR / epoch.base) / 2) * rng.uniform(0.7, 1.3);
-      // Depth ≈ width·1.3: Fig. 9's cells measure round-to-tall (equivalent
+      const halfWidth = bandAspect
+        ? ((arcOverR * bandAspect) / 2) * rng.uniform(0.7, 1.3)
+        : ((arcOverR / epoch.base) / 2) * rng.uniform(0.7, 1.3);
+      // Depth ≈ length·1.3: Fig. 9's cells measure round-to-tall (equivalent
       // diameter ≈ the Fig. 13 arc length), not the shallow scallops a
       // semicircular cap would leave. Width stays the calibrated law.
-      const arrestDepth = 1.3 * halfWidth * epoch.base * rng.uniform(0.75, 1.25);
+      const arrestDepth = bandAspect
+        ? 1.3 * (halfWidth / bandAspect) * rng.uniform(0.75, 1.25)
+        : 1.3 * halfWidth * epoch.base * rng.uniform(0.75, 1.25);
       epoch.holes.push({
         theta: holeAzimuth(),
         halfWidth,
@@ -486,7 +529,9 @@ export function makeDropStepper({
       epoch.wAtDepin = epoch.growth.w;
       // Spread the fence of holes over ~60% of the remaining drying time so
       // the union crosses the severing threshold before dry-out.
-      const expectedHoles = TWO_PI / (holeAngularWidth(epoch.phiEff) / epoch.base);
+      const expectedHoles = bandAspect
+        ? TWO_PI / (holeAngularWidth(epoch.phiEff) * bandAspect)
+        : TWO_PI / (holeAngularWidth(epoch.phiEff) / epoch.base);
       epoch.nucleationGap = (0.6 * (1 - t)) / Math.max(1, expectedHoles);
       epoch.nextNucleation = t + epoch.nucleationGap * rng.uniform(0.5, 1.5);
     }
@@ -505,13 +550,17 @@ export function makeDropStepper({
     const count = 1 + rng.int(2);
     for (let k = 0; k < count; k++) {
       const halfWidth = Math.min(
-        (holeAngularWidth(phiEffAt(t)) / localR / 2) * rng.uniform(0.7, 1.3),
+        bandAspect
+          ? ((holeAngularWidth(phiEffAt(t)) * bandAspect) / 2) * rng.uniform(0.7, 1.3)
+          : (holeAngularWidth(phiEffAt(t)) / localR / 2) * rng.uniform(0.7, 1.3),
         parent.halfWidth * 0.95,
       );
       const off = rng.uniform(-1, 1) * (parent.halfWidth - halfWidth);
       // Parent floor under the child's centre (the cos² edge profile).
       const edge = Math.cos((Math.PI / 2) * (Math.abs(off) / parent.halfWidth));
-      const ownDepth = 1.3 * halfWidth * localR * rng.uniform(0.75, 1.25);
+      const ownDepth = bandAspect
+        ? 1.3 * (halfWidth / bandAspect) * rng.uniform(0.75, 1.25)
+        : 1.3 * halfWidth * localR * rng.uniform(0.75, 1.25);
       epoch.holes.push({
         theta: parent.theta + off,
         halfWidth,
@@ -525,6 +574,7 @@ export function makeDropStepper({
 
   const recordEpoch = (rNext) => {
     events.push({
+      tStart: epoch.tStart,
       tOnset: epoch.tOnset,
       rBase: epoch.base,
       rNext,
@@ -592,30 +642,36 @@ export function makeDropStepper({
       }
     }
 
-    const kappaBins = buildKappaBins(epoch.base, epoch.holes, t);
+    const kappaBins = buildKappaBins(epoch.base, epoch.holes, t, nBins);
     // Arrest contour (holes at full depth): a particle caught by a growing
     // hole rides the receding front and jams where the front will arrest —
     // the snowplow that makes arch walls bright and cell interiors dark.
     // Passing t = ∞ rasterizes every hole at its arrestDepth.
-    const floorBins = buildKappaBins(epoch.base, epoch.holes, Infinity);
+    const floorBins = buildKappaBins(epoch.base, epoch.holes, Infinity, nBins);
 
     // Severing: union of grown holes covers enough of the circumference.
     if (epoch.holes.length > 0) {
       let covered = 0;
       let floorSum = 0;
-      for (let b = 0; b < NBINS; b++) {
+      for (let b = 0; b < nBins; b++) {
         if (kappaBins[b] < epoch.base - 1e-6) {
           covered++;
           floorSum += kappaBins[b];
         }
       }
-      if (covered / NBINS >= SEVER_COVERAGE) {
+      if (covered / nBins >= SEVER_COVERAGE) {
         // Severed liquid retracts freely (Fig. 2's post-depin shrink) before
         // self-pinning re-establishes; the retreat distance is part of the
         // unsolved dewetting-vs-pinning competition, so it stays stochastic.
         // Without it the next epoch would pin at the hole floors, ~2% inside
-        // the old ring — nested rings would be invisible.
-        const retreat = epoch.base * rng.uniform(0.06, 0.14);
+        // the old ring — nested rings would be invisible. On a band the
+        // observable is the doubled edge of a real mug ring, which sits a
+        // large fraction of the half-width inside the first ridge: the
+        // retracting film is squeezed across a thin cross-section, so the
+        // dewetting jump is proportionally deeper than a disk's.
+        const retreat = bandAspect
+          ? epoch.base * rng.uniform(0.15, 0.3)
+          : epoch.base * rng.uniform(0.06, 0.14);
         const rNext = Math.max(0.15, floorSum / covered - retreat);
         recordEpoch(rNext);
         if (phiEffAt(t) < FREE_RECESSION_PHI) {
@@ -639,7 +695,7 @@ export function makeDropStepper({
     // the calibrated retreat draw. Applied after the sever test, which
     // measures hole coverage against the unrelieved base.
     if (epoch.anchors) {
-      for (let b = 0; b < NBINS; b++) {
+      for (let b = 0; b < nBins; b++) {
         const d = epoch.anchorRelief * (0.5 - epoch.anchors[b]);
         kappaBins[b] -= d;
         floorBins[b] -= d;
@@ -649,20 +705,27 @@ export function makeDropStepper({
     const sigma = Math.sqrt(2 * diffusion * dt);
     for (let i = 0; i < particles; i++) {
       if (!alive[i]) continue;
-      const bin = Math.floor((wrap(theta[i]) / TWO_PI) * NBINS);
+      const bin = Math.floor((wrap(theta[i]) / TWO_PI) * nBins);
       const kb = kappaBins[bin];
       const interface_ = kb * (1 - w);
       // The D/rho term is the Itô drift of 2-D Brownian motion's radial
       // coordinate; without it the walk is 1-D-in-rho and piles a 1/r
       // density spike at the centre (the old render hid it with centerFade).
+      // A band's cross-section IS 1-D in u — no Jacobian drift — and its
+      // midline is a circle, not a point: crossing reflects without the
+      // antipodal θ flip a disk center demands.
       let r =
         rho[i] +
-        (radialVelocity(rho[i] / kb, t) * kb + diffusion / Math.max(rho[i], 0.02)) * dt +
+        (radialVelocity(rho[i] / kb, t) * kb +
+          (bandAspect ? 0 : diffusion / Math.max(rho[i], 0.02))) *
+          dt +
         sigma * rng.gaussian();
-      theta[i] += (sigma / Math.max(r, 0.05)) * rng.gaussian();
+      theta[i] += bandAspect
+        ? sigma * bandAspect * rng.gaussian()
+        : (sigma / Math.max(r, 0.05)) * rng.gaussian();
       if (r < 0) {
         r = -r;
-        theta[i] += Math.PI;
+        if (!bandAspect) theta[i] += Math.PI;
       }
       if (r >= interface_) {
         // Pinning is temporal, not a coin flip: an arc holds until the
@@ -700,7 +763,7 @@ export function makeDropStepper({
           // particles migrate before re-pinning) a function of step count —
           // render, animation, and tests all use different counts.
           rho[i] = interface_ * (1 - 0.02 - 0.05 * rng.random());
-          theta[i] += rng.gaussian() * sloshKick;
+          theta[i] += rng.gaussian() * sloshKick * (bandAspect ?? 1);
         }
       } else {
         rho[i] = r;
@@ -733,6 +796,7 @@ export function makeDropStepper({
           rng,
           forceSink: interiorSink,
           cuspSpacing: 0.05 + 0.02 * rng.random(),
+          aspect: bandAspect,
         }).deposits,
       );
     } else {
@@ -819,97 +883,53 @@ export function widthFactor(relDensity) {
 }
 
 // A mug-bottom ring: liquid sits only in an annular band under the cup rim,
-// with pinned contact lines on BOTH sides. The band cross-section behaves
-// like a 1D drying drop, so we reuse the same edge-diverging velocity on the
-// transverse coordinate u ∈ (−1, 1): −1 inner edge, +1 outer edge. The
-// center of the cup's footprint stays dry — no deposit ever lands there.
-export function simulateRing({
+// with pinned contact lines on BOTH sides and the evaporation-driven flow
+// diverging toward each. Not a separate simulation — the band is the drop
+// stepper run twice, mirrored about the band midline. Each half maps
+// ρ ∈ [0,1] as "distance from the midline toward that side's edge" over the
+// transverse coordinate u = side·ρ: the contact line at ρ = 1 is the band
+// edge, and ρ = 0 is the midline, where the flow vanishes by symmetry — the
+// same boundary condition as a drop center. A line receding toward ρ = 0 is
+// therefore inward for the outer half and outward for the inner half; the
+// annulus contracting in two directions is the mirror, not new physics.
+// The halves share the rng stream but not particles: each dries on its own
+// solute share (midline crossings were rare and inert in the old 1-D toy).
+// All the φ physics — τ_d depinning, epochs, anchor fields, holes and
+// arches, interior sinks — runs per edge unchanged; `aspect` = w/R_mid
+// tells the stepper what a radian costs. The center of the cup's footprint
+// stays dry — no deposit ever lands there.
+export function simulateBand({
   particles = 2500,
   steps = 300,
   tEnd = 0.98,
   diffusion = 0.02,
-  ringWidth = 0.05,
-  sampleTheta = null, // rng → θ; supply profile for crescents (default uniform)
+  phi = 0.01,
+  aspect = 0.12,
+  sampleTheta = null,
   pinningAt = null,
-  edgeSlip = null, // test override: {outer?, inner?} with {tDepin, amp}; null = auto draw
   rng,
 } = {}) {
-  if (!rng) throw new Error('simulateRing requires a seeded rng');
-
-  const u = new Float64Array(particles);
-  const theta = new Float64Array(particles);
-  const alive = new Uint8Array(particles).fill(1);
-  for (let i = 0; i < particles; i++) {
-    u[i] = rng.uniform(-1, 1);
-    theta[i] = sampleTheta ? sampleTheta(rng) : rng.uniform(0, 2 * Math.PI);
-  }
-
-  // Band edges stick-slip like the drop's contact line: an edge may depin
-  // once, sector-wise — strong-anchor sectors hold the original line while
-  // weak sectors step into the band and re-pin, leaving a broken parallel
-  // ridge (real mug rings show doubled edges in arcs). One event per edge:
-  // the band is thin, its hysteresis budget is spent in a single slip.
-  const autoSlip = () => {
-    const roll = rng.random();
-    const slip = {
-      field: makeAnchorField(rng, 256),
-      tDepin: rng.uniform(0.45, 0.8) * tEnd,
-      amp: rng.uniform(0.12, 0.3),
-    };
-    return roll < 0.65 ? slip : null;
-  };
-  const slips = {
-    outer: edgeSlip === null ? autoSlip() : (edgeSlip.outer ?? null),
-    inner: edgeSlip === null ? autoSlip() : (edgeSlip.inner ?? null),
-  };
-  for (const s of [slips.outer, slips.inner]) {
-    if (s && !s.field) s.field = makeAnchorField(rng, 256);
-  }
-  const edgeAt = (side, th, t) => {
-    const slip = side > 0 ? slips.outer : slips.inner;
-    if (!slip || t < slip.tDepin) return 1;
-    const b = Math.floor((wrap(th) / TWO_PI) * slip.field.length);
-    return 1 - slip.amp * (1 - slip.field[b]);
-  };
-
+  if (!rng) throw new Error('simulateBand requires a seeded rng');
+  const nOuter = Math.round(particles / 2);
   const deposits = [];
-  const dt = tEnd / steps;
-
-  for (let s = 0; s < steps; s++) {
-    const t = s * dt;
-    const sigma = Math.sqrt(2 * diffusion * dt);
-    for (let i = 0; i < particles; i++) {
-      if (!alive[i]) continue;
-      const dir = Math.sign(u[i]) || (rng.random() < 0.5 ? -1 : 1);
-      const v = u[i] + dir * radialVelocity(Math.abs(u[i]), t) * dt + sigma * rng.gaussian();
-      theta[i] += sigma * 0.3 * rng.gaussian();
-      const edge = edgeAt(Math.sign(v) || dir, theta[i], t);
-      if (Math.abs(v) >= edge) {
-        // Same temporal gate as the sessile drop: strength = hold fraction.
-        if (!pinningAt || t < pinningAt(theta[i]) * tEnd) {
-          alive[i] = 0;
-          deposits.push({
-            u: Math.sign(v) * (edge - Math.abs(rng.gaussian()) * ringWidth),
-            theta: theta[i],
-            t,
-            pinned: true,
-          });
-        } else {
-          // Receding arc: swept back into the band, sloshed along it. The
-          // narrow band re-delivers particles to the edge quickly, so the
-          // sweep-back and slosh are stronger than the sessile-drop case.
-          u[i] = Math.sign(v) * edge * (1 - 0.15 - 0.25 * rng.random());
-          theta[i] += rng.gaussian() * 0.45;
-        }
-      } else {
-        u[i] = v;
-      }
-    }
+  const events = {};
+  for (const [side, count, key] of [
+    [1, nOuter, 'outer'],
+    [-1, particles - nOuter, 'inner'],
+  ]) {
+    const half = simulateDrop({
+      particles: count,
+      steps,
+      tEnd,
+      diffusion,
+      phi,
+      bandAspect: aspect,
+      sampleTheta,
+      pinningAt,
+      rng,
+    });
+    for (const d of half.deposits) deposits.push({ ...d, u: side * d.rho, side });
+    events[key] = half.events;
   }
-
-  for (let i = 0; i < particles; i++) {
-    if (alive[i]) deposits.push({ u: u[i], theta: theta[i], t: tEnd, pinned: false });
-  }
-
-  return { deposits };
+  return { deposits, events };
 }

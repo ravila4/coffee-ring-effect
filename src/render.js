@@ -14,7 +14,7 @@
 import { makeRng, mulberry32 } from './rng.js';
 import { createNoise2D, fbm, smoothstep } from './noise.js';
 import { makeContactLine, makeSpikeField } from './contour.js';
-import { makeSupplySampler, simulateDrop, simulateRing, widthFactor } from './physics.js';
+import { makeSupplySampler, simulateBand, simulateDrop, widthFactor } from './physics.js';
 
 const RING_COLORS = [
   [110, 62, 20],
@@ -291,7 +291,7 @@ export function buildStain({
     }
   };
 
-  const addMugRing = ({ cx, cy, R, wBase, count, supply, spikes = null, overrides = {} }) => {
+  const addMugRing = ({ cx, cy, R, wBase, count, phi, supply, spikes = null, overrides = {} }) => {
     const offW = rng.uniform(100, 200);
     const offO = rng.uniform(400, 500);
     const offI = rng.uniform(600, 700);
@@ -319,11 +319,15 @@ export function buildStain({
       gapAt(theta) ? R : R + wAt(theta) + jo(theta) + (spikes ? R * spikes.at(theta) : 0);
     const innerR = (theta) =>
       gapAt(theta) ? R : Math.max(R * 0.2, Math.min(R - wAt(theta) + ji(theta), R + wAt(theta)));
-    const { deposits } = simulateRing({
+    const { deposits } = simulateBand({
       particles: count,
       steps: 250,
       tEnd: rng.uniform(0.9, 0.985),
       diffusion: rng.uniform(0.01, 0.03),
+      phi,
+      // The metric the band stepper needs: what a radian costs in units of
+      // the band half-width.
+      aspect: wBase / R,
       sampleTheta: (r) => sampler.sample(r),
       pinningAt: rng.random() < partialChance ? makePinning() : null,
       rng,
@@ -382,6 +386,7 @@ export function buildStain({
         R: R * rng.uniform(0.97, 1.03),
         wBase: wBase * rng.uniform(0.85, 1.15),
         count: Math.floor(particles * 0.55),
+        phi: stainPhi,
         supply:
           k === 0
             ? supply

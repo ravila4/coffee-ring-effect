@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   radialVelocity,
   simulateDrop,
-  simulateRing,
+  simulateBand,
   buildKappaBins,
   holeAngularWidth,
   pickWeightedBin,
@@ -782,68 +782,78 @@ test('interiorSink override forces the mode end-to-end', () => {
   assert.ok([...perLevel.values()].some((n) => n >= 4), 'no shared rest arcs — no coherence');
 });
 
-// --- mug ring (unchanged API this slice) ---
+// --- mug band: the drop stepper mirrored about the band midline ---
 
-test('mug-ring sim conserves mass', () => {
-  const { deposits } = simulateRing({ particles: 600, rng: makeRng(201) });
+test('mug band conserves mass', () => {
+  const { deposits } = simulateBand({ particles: 600, rng: makeRng(201) });
   assert.equal(deposits.length, 600);
 });
 
-test('mug-ring deposits collect at both band edges', () => {
-  const { deposits } = simulateRing({ particles: 3000, rng: makeRng(202) });
-  const outer = deposits.filter((d) => d.u > 0.9).length;
-  const inner = deposits.filter((d) => d.u < -0.9).length;
-  assert.ok((outer + inner) / deposits.length >= 0.55, `edge fraction ${(outer + inner) / deposits.length}`);
-  assert.ok(outer / deposits.length >= 0.15, `outer fraction ${outer / deposits.length}`);
-  assert.ok(inner / deposits.length >= 0.15, `inner fraction ${inner / deposits.length}`);
-});
-
-test('mug-ring deposits stay within the band', () => {
-  const { deposits } = simulateRing({ particles: 800, rng: makeRng(203) });
+test('mug band deposits stay within the band', () => {
+  const { deposits } = simulateBand({ particles: 800, rng: makeRng(203) });
   for (const d of deposits) {
     assert.ok(Math.abs(d.u) <= 1 + 1e-9, `u out of band: ${d.u}`);
   }
 });
 
-test('mug band edges stick-slip sector-wise: a broken second ridge inside weak sectors', () => {
-  const { deposits } = simulateRing({
-    particles: 4000,
-    rng: makeRng(210),
-    edgeSlip: { outer: { tDepin: 0.4, amp: 0.3 } },
+test('a concentrated mug band jams both edges and never lets go', () => {
+  // τ_d = 2.41·φ^0.26 exceeds 1 above φ ≈ 0.034: the edges hold to dry-out,
+  // so pinned mass sits only at the two edge ridges — no mid-band fences.
+  const { deposits, events } = simulateBand({
+    particles: 3000,
+    phi: 0.05,
+    tEnd: 0.9,
+    rng: makeRng(202),
   });
-  const outer = deposits.filter((d) => d.pinned && d.u > 0);
-  const slipped = outer.filter((d) => d.u < 0.88 && d.u > 0.55);
-  assert.ok(
-    slipped.length / outer.length > 0.06,
-    `no second ridge inside the outer edge: ${slipped.length}/${outer.length}`,
-  );
-  // Sector-local, not a full circle: present in some azimuthal bins, absent
-  // in others.
-  const NB = 48;
-  const bins = new Set(
-    slipped.map((d) => Math.floor((normalizeTheta(d.theta) / (2 * Math.PI)) * NB)),
-  );
-  assert.ok(bins.size >= 6 && bins.size <= NB - 6, `slipped ridge occupies ${bins.size}/${NB} bins`);
-  // The inner edge was not told to slip: single ridge, nothing mid-band.
-  const inner = deposits.filter((d) => d.pinned && d.u < 0);
-  const innerLow = inner.filter((d) => d.u > -0.88 && d.u < -0.55);
-  assert.ok(
-    innerLow.length / inner.length < 0.03,
-    `inner edge slipped unbidden: ${innerLow.length}/${inner.length}`,
-  );
+  assert.equal(events.outer.length, 1, 'outer edge depinned at high φ');
+  assert.equal(events.inner.length, 1, 'inner edge depinned at high φ');
+  const pinned = deposits.filter((d) => d.pinned);
+  assert.ok(pinned.length / deposits.length >= 0.5, `pinned fraction ${pinned.length / deposits.length}`);
+  const outer = pinned.filter((d) => d.u > 0).length;
+  const inner = pinned.length - outer;
+  assert.ok(outer / pinned.length >= 0.25, `outer share ${outer / pinned.length}`);
+  assert.ok(inner / pinned.length >= 0.25, `inner share ${inner / pinned.length}`);
+  const midband = pinned.filter((d) => Math.abs(d.u) < 0.8).length;
+  assert.ok(midband / pinned.length < 0.01, `mid-band fences at high φ: ${midband}/${pinned.length}`);
 });
 
-test('mug-ring sim is deterministic for a given seed', () => {
-  const a = simulateRing({ particles: 300, rng: makeRng(204) });
-  const b = simulateRing({ particles: 300, rng: makeRng(204) });
+test('a dilute mug band depins and re-pins broken inner fences — φ works on mugs', () => {
+  // τ_d(0.005) ≈ 0.61: both edges sever mid-dry and re-pin sector-wise
+  // through the anchor fields — the doubled ragged edge of a real mug ring.
+  const { deposits, events } = simulateBand({ particles: 4000, phi: 0.005, rng: makeRng(210) });
+  assert.ok(events.outer.length >= 2, `outer edge never re-pinned: ${events.outer.length} epochs`);
+  assert.ok(events.inner.length >= 2, `inner edge never re-pinned: ${events.inner.length} epochs`);
+  // Fences are what a re-pinned epoch deposits: select by time, not by u —
+  // epoch-1 arch floors overlap the fence radii and cover every sector.
+  const sever = { 1: events.outer[1].tStart, [-1]: events.inner[1].tStart };
+  const pinned = deposits.filter((d) => d.pinned);
+  const fences = pinned.filter((d) => d.t >= sever[d.side]);
+  assert.ok(fences.length / pinned.length > 0.05, `no inner fences: ${fences.length}/${pinned.length}`);
+  // Sector-local, not a closed parallel ring. Binary occupancy is the wrong
+  // statistic here: on a band every particle hugs the edge, so the moment of
+  // re-pinning floods all sectors and even weak ones trap a few grains
+  // before their hold expires. The fence reads broken because strong-anchor
+  // arcs run several times denser than the weak sectors' early-hold traces.
+  const NB = 48;
+  const counts = new Array(NB).fill(0);
+  for (const d of fences) counts[Math.floor((normalizeTheta(d.theta) / (2 * Math.PI)) * NB)]++;
+  const sorted = [...counts].sort((a, b) => a - b);
+  const weak = sorted.slice(0, 12).reduce((a, b) => a + b, 0);
+  const strong = sorted.slice(-12).reduce((a, b) => a + b, 0);
+  assert.ok(weak < 0.35 * strong, `fence density barely modulated: weak ${weak} vs strong ${strong}`);
+});
+
+test('mug band sim is deterministic for a given seed', () => {
+  const a = simulateBand({ particles: 300, rng: makeRng(204) });
+  const b = simulateBand({ particles: 300, rng: makeRng(204) });
   assert.deepEqual(a.deposits, b.deposits);
 });
 
-test('mug-ring pinning gate thins unpinned arcs', () => {
+test('mug band pinning gate thins unpinned arcs', () => {
   const pinningAt = (theta) => (normalizeTheta(theta) < Math.PI ? 0.02 : 1);
-  const { deposits } = simulateRing({ particles: 3000, rng: makeRng(205), pinningAt });
-  const edge = deposits.filter((d) => Math.abs(d.u) > 0.9);
+  const { deposits } = simulateBand({ particles: 3000, phi: 0.05, rng: makeRng(205), pinningAt });
+  const edge = deposits.filter((d) => d.pinned && Math.abs(d.u) > 0.8);
   const gap = edge.filter((d) => normalizeTheta(d.theta) < Math.PI).length;
-  const pinned = edge.filter((d) => normalizeTheta(d.theta) >= Math.PI).length;
-  assert.ok(gap < 0.3 * pinned, `gap arc has ${gap} edge deposits vs ${pinned} pinned`);
+  const held = edge.filter((d) => normalizeTheta(d.theta) >= Math.PI).length;
+  assert.ok(gap < 0.3 * held, `gap arc has ${gap} edge deposits vs ${held} held`);
 });

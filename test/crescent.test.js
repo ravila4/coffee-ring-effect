@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeSupplySampler, widthFactor, simulateRing } from '../src/physics.js';
+import { makeSupplySampler, widthFactor, simulateBand } from '../src/physics.js';
 import { buildStain } from '../src/render.js';
 import { makeRng } from '../src/rng.js';
 
@@ -73,7 +73,7 @@ test('band width couples as the square root of local density', () => {
 
 test('the supply gap collects no deposits at all', () => {
   const s = makeSupplySampler({ originTheta: 0, arcHalfLength: 0.5 * Math.PI, falloff: 1 });
-  const { deposits } = simulateRing({
+  const { deposits } = simulateBand({
     particles: 2500,
     rng: makeRng(402),
     sampleTheta: (rng) => s.sample(rng),
@@ -85,7 +85,7 @@ test('the supply gap collects no deposits at all', () => {
 
 test('band mass decays with arc distance from the drip', () => {
   const s = makeSupplySampler({ originTheta: 0, arcHalfLength: 0.8 * Math.PI, falloff: 1 });
-  const { deposits } = simulateRing({
+  const { deposits } = simulateBand({
     particles: 3000,
     rng: makeRng(403),
     sampleTheta: (rng) => s.sample(rng),
@@ -101,7 +101,7 @@ test('band mass decays with arc distance from the drip', () => {
 test('crescent sampling is deterministic per seed', () => {
   const mk = () => {
     const s = makeSupplySampler({ originTheta: 2, arcHalfLength: 0.6 * Math.PI, falloff: 1.1 });
-    return simulateRing({ particles: 400, rng: makeRng(404), sampleTheta: (rng) => s.sample(rng) });
+    return simulateBand({ particles: 400, rng: makeRng(404), sampleTheta: (rng) => s.sample(rng) });
   };
   assert.deepEqual(mk().deposits, mk().deposits);
 });

@@ -2,7 +2,7 @@
 
 Procedural coffee stains from a particle simulation of the coffee-ring physics (Deegan et al.). A stain renders once to a canvas in 40 to 120 ms and is reused as a static image after that, so generation cost never recurs. Every stain is a pure function of its seed. No dependencies.
 
-![Twelve procedurally generated coffee stains in the demo grid: mug rings, crescents, splashed drops with satellite specks, and plain drops](docs/demo-grid.png)
+![Six procedurally generated coffee stains in the demo grid: mug rings, a crescent, and splashed drops with scalloped dark rims and satellite specks](docs/demo-grid.png)
 
 ## The physics
 

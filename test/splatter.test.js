@@ -292,11 +292,15 @@ test('structural deposits paint sharper and darker than dots and residue', () =>
   const residue = splatStyleFor({ pinned: false });
   const pinned = splatStyleFor({ pinned: true });
   for (const structural of [spoke, arc]) {
-    assert.ok(structural.r < dot.r, 'structure must be smaller than speckle');
+    assert.ok((structural.rInk ?? structural.r) < dot.r, 'structure must be smaller than speckle');
     assert.ok(structural.aLo > dot.aHi, 'structure must out-darken speckle outright');
   }
   assert.deepEqual(residue, dot);
-  assert.ok(pinned.aHi >= spoke.aHi, 'rim mass stays the darkest population');
+  // Per-splat painted ink (alpha × footprint area): the rim stays the
+  // heaviest population even though line splats carry higher raw alpha —
+  // their footprint is much smaller.
+  const inkOf = (s) => s.aHi * (s.rInk ?? s.r) ** 2;
+  assert.ok(inkOf(pinned) >= inkOf(spoke), 'rim mass stays the darkest population');
 });
 
 test('tracer count is a resolution knob: painted ink mass stays put', () => {
@@ -305,7 +309,7 @@ test('tracer count is a resolution knob: painted ink mass stays put', () => {
   // a high-resolution render paints a darker stain of the same coffee.
   const ink = (particles) => {
     const stain = buildStain({ seed: 5, radius: 100, particles, type: 'drop', splashEnergy: 0 });
-    return stain.splats.reduce((t, s) => t + s.alpha * s.r * s.r, 0);
+    return stain.splats.reduce((t, s) => t + s.alpha * (s.rInk ?? s.r) ** 2, 0);
   };
   const ratio = ink(14000) / ink(3500);
   assert.ok(ratio > 0.75 && ratio < 1.35, `ink mass scaled with tracer count: ratio ${ratio.toFixed(2)}`);

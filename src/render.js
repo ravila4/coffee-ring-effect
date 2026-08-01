@@ -115,10 +115,16 @@ export function speckCutoff(phi) {
 // small and dark enough to read as lines; dots and in-place residue blur
 // into the pale interior speckle. Deegan's grey level is particle count —
 // structure exists in the deposit data, and a flat mapping buries it.
+// rInk narrows the pigment footprint in the beige view only: a vein is a
+// line of concentrated deposit, and the same ink in half the width reads
+// twice as dark under multiply — at demo tracer counts alphaNorm pushes
+// line splats to ~2% alpha, where a 2 px soft blob vanishes into the wash
+// but a sharp one still draws. Dark-field keeps r: its dot geometry is the
+// Fig. 9 comparison instrument and must not shift under aesthetic tuning.
 const SPLAT_STYLES = {
   pinned: { r: 1, aLo: 0.06, aHi: 0.13 },
-  spoke: { r: 0.85, aLo: 0.055, aHi: 0.1 },
-  arc: { r: 0.85, aLo: 0.055, aHi: 0.1 },
+  spoke: { r: 0.85, rInk: 0.45, aLo: 0.22, aHi: 0.36, dark: true },
+  arc: { r: 0.85, rInk: 0.45, aLo: 0.22, aHi: 0.36, dark: true },
   dot: { r: 1.3, aLo: 0.018, aHi: 0.042 },
   residue: { r: 1.3, aLo: 0.018, aHi: 0.042 },
 };
@@ -230,14 +236,20 @@ export function buildStain({
   const alphaNorm = Math.min(2, TRACER_BASELINE / particles);
   const pushSplat = (x, y, deposit, shade) => {
     const style = splatStyleFor(deposit);
+    const rJitter = rng.uniform(0.6, 1.4);
     splats.push({
       x,
       y,
-      r: splatBase * rng.uniform(0.6, 1.4) * style.r,
+      r: splatBase * rJitter * style.r,
+      rInk: splatBase * rJitter * (style.rInk ?? style.r),
       // Azimuthal shade belongs to the contact line, so it only modulates
       // jammed deposits; interior structure paints flat.
       alpha: rng.uniform(style.aLo, style.aHi) * (deposit.pinned ? shade : 1) * alphaNorm,
-      color: RING_COLORS[rng.int(RING_COLORS.length)],
+      // Line structure always takes the darkest ink; the random palette
+      // draw still runs so the rng stream (and every seeded stain) holds.
+      color: style.dark
+        ? (rng.int(RING_COLORS.length), RING_COLORS[2])
+        : RING_COLORS[rng.int(RING_COLORS.length)],
     });
   };
 
@@ -494,7 +506,7 @@ export function paintStain(ctx, stain, { cx = 0, cy = 0, darkField = false } = {
   }
   for (const s of stain.splats) {
     ctx.beginPath();
-    ctx.arc(s.x, s.y, s.r, 0, 2 * Math.PI);
+    ctx.arc(s.x, s.y, s.rInk ?? s.r, 0, 2 * Math.PI);
     ctx.fillStyle = `rgba(${s.color.join(',')},${s.alpha})`;
     ctx.fill();
   }

@@ -11,7 +11,7 @@
 //            placements land at slightly offset centers and multiply-darken
 //            where they cross.
 
-import { makeRng, mulberry32 } from './rng.js';
+import { forkSeed, makeRng, mulberry32 } from './rng.js';
 import { createNoise2D, fbm, smoothstep } from './noise.js';
 import { makeContactLine, makeSpikeField } from './contour.js';
 import { makeSupplySampler, simulateBand, simulateDrop, widthFactor } from './physics.js';
@@ -145,7 +145,18 @@ export function buildStain({
   canvasBound = DEFAULT_BOUND, // clip radius in units of the parent radius
   dropOverrides = {},
 } = {}) {
+  // Independent random streams, forked from the seed. The particle sims eat
+  // a φ-dependent number of draws and a hard splash grows more fingers, so a
+  // single shared stream would let one knob shift the draws behind every
+  // unrelated decision — turn φ, and the satellites move. Instead:
+  //   rng          composition — what happened on the table (stain type,
+  //                drip, coffee strength, how many times the cup came down)
+  //   splashRng    impact — fingers, spike strengths, satellite launches
+  //   componentRng one stream per simulated component (parent placements,
+  //                then each satellite), so no sim can shift a neighbor
   const rng = makeRng(seed);
+  const splashRng = makeRng(forkSeed(seed, 1));
+  const componentRng = (k) => makeRng(forkSeed(seed, 8 + k));
   const noise2D = createNoise2D(mulberry32((seed ^ 0x9e3779b9) >>> 0));
   const splats = [];
   const washes = [];
@@ -162,22 +173,29 @@ export function buildStain({
           falloff: rng.uniform(0.8, 1.6),
         })
       : null;
-  // A mug's splash happened as the cup came down, at the same rim point the
-  // drip ran from — so the splash direction is the drip origin.
-  const splashDir = stainType === 'mug' ? supply.originTheta : rng.uniform(0, 2 * Math.PI);
   const splatBase = Math.max(0.8, radius * 0.016);
   // One liquid per stain: parent and satellites share the concentration.
   // Log-uniform — φ is a scale parameter and the low decades carry the sparse
   // morphologies (Fig. 8's series), which a linear draw would starve.
-  const stainPhi = dropOverrides.phi ?? Math.exp(rng.uniform(Math.log(0.0005), Math.log(0.03)));
+  // The draw always runs, override or not, so holding the slider at the
+  // auto-drawn value reproduces the auto stain exactly.
+  const phiDraw = Math.exp(rng.uniform(Math.log(0.0005), Math.log(0.03)));
+  const stainPhi = dropOverrides.phi ?? phiDraw;
+  // Mug composition: band width and how many times the cup was set down.
+  const mugHalfWidth = stainType === 'mug' ? radius * rng.uniform(0.1, 0.16) : 0;
+  const placements =
+    stainType === 'mug' && rng.random() < overlapChance ? 2 + rng.int(2) : 1;
+  // A mug's splash happened as the cup came down, at the same rim point the
+  // drip ran from — so the splash direction is the drip origin.
+  const splashDir = stainType === 'mug' ? supply.originTheta : splashRng.uniform(0, 2 * Math.PI);
   // Impact energy: set-downs are mostly gentle, but a hard one splashes;
-  // a spilled drop can always splash.
-  const We =
-    splashEnergy ??
-    (stainType === 'mug'
-      ? Math.exp(rng.uniform(Math.log(2), Math.log(120)))
-      : Math.exp(rng.uniform(Math.log(8), Math.log(320))));
-  const fullFingerCount = fingerCountFor(We, rng);
+  // a spilled drop can always splash. Always drawn, same as φ.
+  const weDraw =
+    stainType === 'mug'
+      ? Math.exp(splashRng.uniform(Math.log(2), Math.log(120)))
+      : Math.exp(splashRng.uniform(Math.log(8), Math.log(320)));
+  const We = splashEnergy ?? weDraw;
+  const fullFingerCount = fingerCountFor(We, splashRng);
   // A mug splash is localized: fingers only sprout from the rim arc near the
   // impact, so the count scales by the fan's share of the circumference
   // (same Rayleigh–Taylor wavelength, shorter rim to break up).
@@ -191,14 +209,14 @@ export function buildStain({
           (_, k) =>
             splashDir +
             (k / Math.max(1, mugFingerCount - 1) - 0.5) * 2 * fanHalf +
-            rng.gaussian() * 0.05,
+            splashRng.gaussian() * 0.05,
         )
       : Array.from(
           { length: fullFingerCount },
           (_, k) =>
             splashDir +
             (k / Math.max(1, fullFingerCount)) * 2 * Math.PI +
-            rng.gaussian() * ((0.25 * Math.PI) / Math.max(1, fullFingerCount)),
+            splashRng.gaussian() * ((0.25 * Math.PI) / Math.max(1, fullFingerCount)),
         );
   const fingerCount = fingerAzimuths.length;
 
@@ -206,7 +224,7 @@ export function buildStain({
   // drying instead of jamming to the end — this is what turns a full ring
   // into a C-shape or leaves gaps. The sim reads strength as a hold
   // fraction, so gap edges fade out instead of stepping.
-  const makePinning = () => {
+  const makePinning = (rng) => {
     const gateOffset = rng.uniform(300, 400);
     const threshold = rng.uniform(-0.05, 0.35);
     return (theta) =>
@@ -221,7 +239,7 @@ export function buildStain({
 
   // Pigment deposition is not azimuthally even in real stains: broad
   // light/dark arcs from uneven pinning. Low-frequency noise over theta.
-  const makeShade = () => {
+  const makeShade = (rng) => {
     const shadeOffset = rng.uniform(200, 300);
     return (theta) =>
       0.65 +
@@ -234,7 +252,7 @@ export function buildStain({
   // Capped for sparse test runs, where the inverse rule would blow past
   // opaque.
   const alphaNorm = Math.min(2, TRACER_BASELINE / particles);
-  const pushSplat = (x, y, deposit, shade) => {
+  const pushSplat = (rng, x, y, deposit, shade) => {
     const style = splatStyleFor(deposit);
     const rJitter = rng.uniform(0.6, 1.4);
     splats.push({
@@ -245,15 +263,15 @@ export function buildStain({
       // Azimuthal shade belongs to the contact line, so it only modulates
       // jammed deposits; interior structure paints flat.
       alpha: rng.uniform(style.aLo, style.aHi) * (deposit.pinned ? shade : 1) * alphaNorm,
-      // Line structure always takes the darkest ink; the random palette
-      // draw still runs so the rng stream (and every seeded stain) holds.
-      color: style.dark
-        ? (rng.int(RING_COLORS.length), RING_COLORS[2])
-        : RING_COLORS[rng.int(RING_COLORS.length)],
+      // Line structure always takes the darkest ink.
+      color: style.dark ? RING_COLORS[2] : RING_COLORS[rng.int(RING_COLORS.length)],
     });
   };
 
-  const addDrop = ({ cx, cy, r, count, phi, spikes = null, overrides = {} }) => {
+  const addDrop = ({ rng, cx, cy, r, count, phi, spikes = null, overrides = {} }) => {
+    // Everything that shapes the footprint draws before the sim runs, so a φ
+    // change (which alters how many numbers the sim eats) can only re-roll
+    // the ring structure, never the contact line or the wash.
     const line = makeContactLine({
       radius: r,
       amp: rng.uniform(0.025, 0.09),
@@ -262,17 +280,18 @@ export function buildStain({
       offset: rng.uniform(0, 100),
       spikes,
     });
+    const washAlpha = rng.uniform(0.1, 0.18);
+    const baseShade = makeShade(rng);
     const { deposits } = simulateDrop({
       particles: count,
       steps: 220,
       tEnd: rng.uniform(0.9, 0.985),
       diffusion: rng.uniform(0.008, 0.035),
       phi,
-      pinningAt: rng.random() < partialChance ? makePinning() : null,
+      pinningAt: rng.random() < partialChance ? makePinning(rng) : null,
       rng,
       ...overrides,
     });
-    const baseShade = makeShade();
     // Evaporative flux diverges at sharp finger tips, so tips darken. Bounded
     // enhancement — flux at a mathematically sharp tip is infinite, and an
     // unbounded multiplier clips to black.
@@ -281,20 +300,24 @@ export function buildStain({
     washes.push({
       points: line.points().map((p) => ({ x: cx + p.x, y: cy + p.y })),
       color: WASH_COLOR,
-      alpha: rng.uniform(0.1, 0.18),
+      alpha: washAlpha,
     });
     for (const d of deposits) {
       const rr = d.rho * line.radiusAt(d.theta);
       // No centerFade: the bullseye it papered over was the 1-D radial
       // walk's 1/r pile-up, fixed in the sim itself.
-      pushSplat(cx + rr * Math.cos(d.theta), cy + rr * Math.sin(d.theta), d, shadeAt(d.theta));
+      pushSplat(rng, cx + rr * Math.cos(d.theta), cy + rr * Math.sin(d.theta), d, shadeAt(d.theta));
     }
   };
 
-  const addMugRing = ({ cx, cy, R, wBase, count, phi, supply, spikes = null, overrides = {} }) => {
+  const addMugRing = ({ rng, cx, cy, R, wBase, count, phi, supply, spikes = null, overrides = {} }) => {
+    // Same rule as addDrop: every draw that shapes the band contour and wash
+    // happens before the sim, so φ only re-rolls what the physics deposits.
     const offW = rng.uniform(100, 200);
     const offO = rng.uniform(400, 500);
     const offI = rng.uniform(600, 700);
+    const washAlpha = rng.uniform(0.08, 0.15);
+    const baseShade = makeShade(rng);
     const sampler = makeSupplySampler(supply);
     // Band half-width wanders slowly around the ring, scaled by the drip
     // supply: thick lobe near the origin, sliver in the dry gap. The wash
@@ -329,11 +352,10 @@ export function buildStain({
       // the band half-width.
       aspect: wBase / R,
       sampleTheta: (r) => sampler.sample(r),
-      pinningAt: rng.random() < partialChance ? makePinning() : null,
+      pinningAt: rng.random() < partialChance ? makePinning(rng) : null,
       rng,
       ...overrides,
     });
-    const baseShade = makeShade();
     // Same tip darkening as the drop's fingers: flux diverges at sharp tips.
     const shadeAt = spikes
       ? (theta) => baseShade(theta) * (1 + 0.45 * spikes.envelopeAt(theta))
@@ -350,18 +372,18 @@ export function buildStain({
       points: ringPts(outerR),
       holePoints: ringPts(innerR),
       color: WASH_COLOR,
-      alpha: rng.uniform(0.08, 0.15),
+      alpha: washAlpha,
     });
     for (const d of deposits) {
       const out = outerR(d.theta);
       const inn = innerR(d.theta);
       const rr = (out + inn) / 2 + (d.u * (out - inn)) / 2;
-      pushSplat(cx + rr * Math.cos(d.theta), cy + rr * Math.sin(d.theta), d, shadeAt(d.theta));
+      pushSplat(rng, cx + rr * Math.cos(d.theta), cy + rr * Math.sin(d.theta), d, shadeAt(d.theta));
     }
   };
 
   if (stainType === 'mug') {
-    const wBase = radius * rng.uniform(0.1, 0.16);
+    const wBase = mugHalfWidth;
     const R = radius - wBase;
     // The splash spikes ride the band's outer edge, clustered at the drip
     // origin — and only on the first placement: the cup may be set down
@@ -370,17 +392,17 @@ export function buildStain({
       fingerCount > 0
         ? makeSpikeField({
             azimuths: fingerAzimuths,
-            amps: fingerAzimuths.map(() => rng.uniform(0.35, 1.3)),
+            amps: fingerAzimuths.map(() => splashRng.uniform(0.35, 1.3)),
             // Steeper than the drop's law: the band is thin, so the same
             // impact throws proportionally longer fingers off its edge.
             amp: Math.min(0.25, 0.03 + 0.009 * Math.sqrt(We)),
-            sharpness: rng.uniform(2.2, 3.5),
+            sharpness: splashRng.uniform(2.2, 3.5),
             halfWidth: (0.84 * fanHalf) / Math.max(1, fingerCount - 1),
           })
         : null;
-    const placements = rng.random() < overlapChance ? 2 + rng.int(2) : 1;
     for (let k = 0; k < placements; k++) {
       addMugRing({
+        rng: componentRng(k),
         cx: k === 0 ? 0 : rng.gaussian() * 0.1 * radius,
         cy: k === 0 ? 0 : rng.gaussian() * 0.1 * radius,
         R: R * rng.uniform(0.97, 1.03),
@@ -401,6 +423,7 @@ export function buildStain({
     }
   } else {
     addDrop({
+      rng: componentRng(0),
       cx: 0,
       cy: 0,
       r: radius,
@@ -410,11 +433,11 @@ export function buildStain({
         fingerCount > 0
           ? {
               azimuths: fingerAzimuths,
-              amps: fingerAzimuths.map(() => rng.uniform(0.35, 1.3)),
+              amps: fingerAzimuths.map(() => splashRng.uniform(0.35, 1.3)),
               // Cap is geometric, not aesthetic: fingers may reach as long as
               // the canvas leaves room (wobble 0.09 + amps up to 1.3× fit).
               amp: Math.min(0.4 * (canvasBound - 1.12), 0.02 + 0.006 * Math.sqrt(We)),
-              sharpness: rng.uniform(2.2, 3.5),
+              sharpness: splashRng.uniform(2.2, 3.5),
             }
           : null,
       overrides: dropOverrides,
@@ -424,25 +447,29 @@ export function buildStain({
   // Satellites pinch off the finger tips; dribbles from a set-down cup
   // scatter around the drip. Placement is clamped from the actual excursion
   // each droplet can reach, so nothing gets guillotined at the canvas edge.
-  const specs = satelliteSpecsFor(We, fingerAzimuths, rng, {
+  const specs = satelliteSpecsFor(We, fingerAzimuths, splashRng, {
     bound: canvasBound,
     scatterDir: stainType === 'mug' ? splashDir : null,
   });
   const cutoff = speckCutoff(stainPhi);
-  for (const spec of specs) {
+  specs.forEach((spec, j) => {
+    // Each satellite draws from its own stream: whether THIS one rings or
+    // dries as a blob flips with φ (the speck cutoff), and that must not
+    // re-roll its neighbors' trails or rings.
+    const satRng = componentRng(8 + j);
     const maxCenter = canvasBound - 0.05 - spec.size * 1.3;
     const clamped = Math.min(spec.dist, maxCenter);
     const dist = clamped * radius;
     const x = dist * Math.cos(spec.theta);
     const y = dist * Math.sin(spec.theta);
     if (fingerCount > 0) {
-      for (const p of trailSpecsFor({ ...spec, dist: clamped }, rng)) {
+      for (const p of trailSpecsFor({ ...spec, dist: clamped }, satRng)) {
         splats.push({
           x: p.dist * radius * Math.cos(p.theta),
           y: p.dist * radius * Math.sin(p.theta),
-          r: Math.max(0.5, p.size * radius * rng.uniform(0.5, 0.9)),
-          alpha: rng.uniform(0.05, 0.11),
-          color: RING_COLORS[rng.int(RING_COLORS.length)],
+          r: Math.max(0.5, p.size * radius * satRng.uniform(0.5, 0.9)),
+          alpha: satRng.uniform(0.05, 0.11),
+          color: RING_COLORS[satRng.int(RING_COLORS.length)],
         });
       }
     }
@@ -450,18 +477,19 @@ export function buildStain({
       // Too dilute to self-pin at this size: a solid blob, no ring, no sim.
       // Same pigment constants as ring splats so the populations match.
       const px = spec.size * radius;
-      const n = 2 + rng.int(3);
+      const n = 2 + satRng.int(3);
       for (let k = 0; k < n; k++) {
         splats.push({
-          x: x + rng.uniform(-0.3, 0.3) * px,
-          y: y + rng.uniform(-0.3, 0.3) * px,
-          r: px * rng.uniform(0.35, 0.75),
-          alpha: rng.uniform(0.06, 0.13),
-          color: RING_COLORS[rng.int(RING_COLORS.length)],
+          x: x + satRng.uniform(-0.3, 0.3) * px,
+          y: y + satRng.uniform(-0.3, 0.3) * px,
+          r: px * satRng.uniform(0.35, 0.75),
+          alpha: satRng.uniform(0.06, 0.13),
+          color: RING_COLORS[satRng.int(RING_COLORS.length)],
         });
       }
     } else {
       addDrop({
+        rng: satRng,
         cx: x,
         cy: y,
         r: spec.size * radius,
@@ -469,9 +497,20 @@ export function buildStain({
         phi: stainPhi,
       });
     }
-  }
+  });
 
-  return { splats, washes, radius, seed, type: stainType, splashEnergy: We, splashDir, fingerAzimuths };
+  return {
+    splats,
+    washes,
+    radius,
+    seed,
+    type: stainType,
+    phi: stainPhi,
+    splashEnergy: We,
+    splashDir,
+    fingerAzimuths,
+    satellites: specs,
+  };
 }
 
 export function paintStain(ctx, stain, { cx = 0, cy = 0, darkField = false } = {}) {

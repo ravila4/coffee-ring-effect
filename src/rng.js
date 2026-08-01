@@ -12,6 +12,17 @@ export function mulberry32(seed) {
   };
 }
 
+// Hash a parent seed with a stream index into the seed of an independent
+// sub-stream. Consumers that draw an input-dependent NUMBER of values (the
+// particle sims eat more randomness at low φ, a hard splash grows more
+// fingers) get their own stream, so turning one knob can never shift the
+// draws behind an unrelated decision. Murmur3-style finalizer for avalanche.
+export function forkSeed(seed, stream) {
+  let a = (Math.imul(seed, 0x9e3779b9) + Math.imul(stream + 1, 0x85ebca6b)) >>> 0;
+  a = Math.imul(a ^ (a >>> 16), 0xc2b2ae35);
+  return (a ^ (a >>> 13)) >>> 0;
+}
+
 export function makeRng(seed) {
   const random = mulberry32(seed);
   let spare = null;

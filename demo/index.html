@@ -208,7 +208,7 @@ function drawCell(cell) {
   cell.stain = stain;
   const ms = (performance.now() - t0).toFixed(0);
   cell.cap.textContent =
-    `seed ${cell.seed} · ${stain.type} · We ${stain.splashEnergy.toFixed(0)} · ${ms} ms`;
+    `seed ${cell.seed} · ${stain.type} · φ ${stain.phi.toPrecision(2)} · We ${stain.splashEnergy.toFixed(0)} · ${ms} ms`;
 }
 
 // Resolves after the browser has painted, so each finished stain (and the

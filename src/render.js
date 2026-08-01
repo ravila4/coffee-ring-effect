@@ -127,12 +127,27 @@ export function splatStyleFor(deposit) {
   return SPLAT_STYLES[deposit.pinned ? 'pinned' : (deposit.sink ?? 'residue')];
 }
 
-export function buildStain({
+// Independent random streams, forked from the seed. The particle sims eat
+// a φ-dependent number of draws and a hard splash grows more fingers, so a
+// single shared stream would let one knob shift the draws behind every
+// unrelated decision — turn φ, and the satellites move. Instead:
+//   rng          composition — what happened on the table (stain type,
+//                drip, coffee strength, how many times the cup came down)
+//   splashRng    impact — fingers, spike strengths, satellite launches
+//   componentRng one stream per simulated component (parent placements,
+//                then each satellite), so no sim can shift a neighbor
+// composeStain owns the first two, emitStain the third. Within one stream
+// the order of draws is the stain's identity: a seed reproduces a stain only
+// for as long as that order holds, so a new draw belongs at the end of its
+// stream, never spliced into the middle.
+
+// What happened on the table, before a single particle moves: the stain's
+// type, where the coffee ran down the rim, how strong it was, how hard it
+// landed, and where each set-down of the cup sat. Plain serializable data.
+export function composeStain({
   seed,
   radius = 140,
-  particles = 3500,
   type = 'auto', // 'drop' | 'mug' | 'auto'
-  partialChance = 0.55,
   mugChance = 0.5,
   overlapChance = 0.2,
   multiDripChance = 0.25,
@@ -141,35 +156,8 @@ export function buildStain({
   canvasBound = DEFAULT_BOUND, // clip radius in units of the parent radius
   phi = null, // pigment concentration; continuous draw when null
 } = {}) {
-  // The primary lobe sets the splash azimuth, so the override is read before
-  // any sampler runs and an empty list has nothing to aim at.
-  if (mugSupply !== null && (!Array.isArray(mugSupply) || mugSupply.length === 0)) {
-    throw new TypeError('mugSupply must be a non-empty array of lobes');
-  }
-  // Both are continuous draws when null and NaN geometry three modules later
-  // if garbage gets through. Zero splash is a legal gentle set-down; zero
-  // pigment is no stain at all.
-  if (phi !== null && !(Number.isFinite(phi) && phi > 0)) {
-    throw new RangeError(`phi must be finite and positive, got ${phi}`);
-  }
-  if (splashEnergy !== null && !(Number.isFinite(splashEnergy) && splashEnergy >= 0)) {
-    throw new RangeError(`splashEnergy must be finite and non-negative, got ${splashEnergy}`);
-  }
-  // Independent random streams, forked from the seed. The particle sims eat
-  // a φ-dependent number of draws and a hard splash grows more fingers, so a
-  // single shared stream would let one knob shift the draws behind every
-  // unrelated decision — turn φ, and the satellites move. Instead:
-  //   rng          composition — what happened on the table (stain type,
-  //                drip, coffee strength, how many times the cup came down)
-  //   splashRng    impact — fingers, spike strengths, satellite launches
-  //   componentRng one stream per simulated component (parent placements,
-  //                then each satellite), so no sim can shift a neighbor
   const rng = makeRng(seed);
   const splashRng = makeRng(forkSeed(seed, 1));
-  const componentRng = (k) => makeRng(forkSeed(seed, 8 + k));
-  const noise2D = createNoise2D(mulberry32((seed ^ 0x9e3779b9) >>> 0));
-  const splats = [];
-  const washes = [];
   const stainType = type === 'auto' ? (rng.random() < mugChance ? 'mug' : 'drop') : type;
   // One drip event per stain: overlap placements share the supply with
   // small jitter (the cup was set down twice, the drip only happened once).
@@ -205,7 +193,6 @@ export function buildStain({
     return lobes;
   };
   const supply = stainType === 'mug' ? (mugSupply ?? drawSupplyLobes()) : null;
-  const splatBase = Math.max(0.8, radius * 0.016);
   // One liquid per stain: parent and satellites share the concentration.
   // Log-uniform — φ is a scale parameter and the low decades carry the sparse
   // morphologies (Fig. 8's series), which a linear draw would starve.
@@ -215,8 +202,33 @@ export function buildStain({
   const stainPhi = phi ?? phiDraw;
   // Mug composition: band width and how many times the cup was set down.
   const mugHalfWidth = stainType === 'mug' ? radius * rng.uniform(0.1, 0.16) : 0;
-  const placements =
+  const placementCount =
     stainType === 'mug' && rng.random() < overlapChance ? 2 + rng.int(2) : 1;
+  // Where each set-down landed. The first is the reference; later ones are
+  // nudged off centre, take their own band width, and carry the same drip
+  // supply shifted a little — the cup was not put back down in quite the
+  // same spot.
+  const placements = [];
+  if (stainType === 'mug') {
+    const wBase = mugHalfWidth;
+    const R = radius - wBase;
+    for (let k = 0; k < placementCount; k++) {
+      placements.push({
+        cx: k === 0 ? 0 : rng.gaussian() * 0.1 * radius,
+        cy: k === 0 ? 0 : rng.gaussian() * 0.1 * radius,
+        R: R * rng.uniform(0.97, 1.03),
+        wBase: wBase * rng.uniform(0.85, 1.15),
+        supply:
+          k === 0
+            ? supply
+            : supply.map((lobe) => ({
+                ...lobe,
+                originTheta: lobe.originTheta + rng.gaussian() * 0.06,
+                arcHalfLength: lobe.arcHalfLength * rng.uniform(0.94, 1.06),
+              })),
+      });
+    }
+  }
   // A mug's splash happened as the cup came down, at the rim point of first
   // contact — the primary drip. Extra lobes just wet, no impact.
   const splashDir = stainType === 'mug' ? supply[0].originTheta : splashRng.uniform(0, 2 * Math.PI);
@@ -250,6 +262,71 @@ export function buildStain({
             (k / Math.max(1, fullFingerCount)) * 2 * Math.PI +
             splashRng.gaussian() * ((0.25 * Math.PI) / Math.max(1, fullFingerCount)),
         );
+  const fingerCount = fingerAzimuths.length;
+  // The splash fingers, as a spike-field spec. On a mug they ride the band's
+  // outer edge, clustered at the drip origin; on a drop they deform the whole
+  // contact line.
+  const spikes =
+    fingerCount === 0
+      ? null
+      : stainType === 'mug'
+        ? {
+            azimuths: fingerAzimuths,
+            amps: fingerAzimuths.map(() => splashRng.uniform(0.35, 1.3)),
+            // Steeper than the drop's law: the band is thin, so the same
+            // impact throws proportionally longer fingers off its edge.
+            amp: Math.min(0.25, 0.03 + 0.009 * Math.sqrt(We)),
+            sharpness: splashRng.uniform(2.2, 3.5),
+            halfWidth: (0.84 * fanHalf) / Math.max(1, fingerCount - 1),
+          }
+        : {
+            azimuths: fingerAzimuths,
+            amps: fingerAzimuths.map(() => splashRng.uniform(0.35, 1.3)),
+            // Cap is geometric, not aesthetic: fingers may reach as long as
+            // the canvas leaves room (wobble 0.09 + amps up to 1.3× fit).
+            amp: Math.min(0.4 * (canvasBound - 1.12), 0.02 + 0.006 * Math.sqrt(We)),
+            sharpness: splashRng.uniform(2.2, 3.5),
+          };
+  // Satellites pinch off the finger tips; dribbles from a set-down cup
+  // scatter around the drip.
+  const satellites = satelliteSpecsFor(We, fingerAzimuths, splashRng, {
+    bound: canvasBound,
+    scatterDir: stainType === 'mug' ? splashDir : null,
+  });
+
+  return {
+    type: stainType,
+    phi: stainPhi,
+    supply,
+    splashEnergy: We,
+    splashDir,
+    fingerAzimuths,
+    placements,
+    spikes,
+    satellites,
+  };
+}
+
+// Dry the composition: run the particle sims and turn their deposits into
+// splats and washes. Every draw here comes from a per-component stream, so
+// re-rolling one component leaves its neighbors alone.
+export function emitStain(
+  composition,
+  { seed, radius, particles, partialChance, canvasBound },
+) {
+  const {
+    type: stainType,
+    phi: stainPhi,
+    fingerAzimuths,
+    placements,
+    spikes,
+    satellites,
+  } = composition;
+  const componentRng = (k) => makeRng(forkSeed(seed, 8 + k));
+  const noise2D = createNoise2D(mulberry32((seed ^ 0x9e3779b9) >>> 0));
+  const splats = [];
+  const washes = [];
+  const splatBase = Math.max(0.8, radius * 0.016);
   const fingerCount = fingerAzimuths.length;
 
   // Weak-pinning arcs where the contact line lets go partway through the
@@ -411,43 +488,22 @@ export function buildStain({
   };
 
   if (stainType === 'mug') {
-    const wBase = mugHalfWidth;
-    const R = radius - wBase;
-    // The splash spikes ride the band's outer edge, clustered at the drip
-    // origin — and only on the first placement: the cup may be set down
-    // twice, the splash happened once.
-    const bandSpikes =
-      fingerCount > 0
-        ? makeSpikeField({
-            azimuths: fingerAzimuths,
-            amps: fingerAzimuths.map(() => splashRng.uniform(0.35, 1.3)),
-            // Steeper than the drop's law: the band is thin, so the same
-            // impact throws proportionally longer fingers off its edge.
-            amp: Math.min(0.25, 0.03 + 0.009 * Math.sqrt(We)),
-            sharpness: splashRng.uniform(2.2, 3.5),
-            halfWidth: (0.84 * fanHalf) / Math.max(1, fingerCount - 1),
-          })
-        : null;
-    for (let k = 0; k < placements; k++) {
+    // The splash rode the band's outer edge on the first placement only: the
+    // cup may be set down twice, the splash happened once.
+    const bandSpikes = spikes ? makeSpikeField(spikes) : null;
+    placements.forEach((placement, k) => {
       addMugRing({
         rng: componentRng(k),
-        cx: k === 0 ? 0 : rng.gaussian() * 0.1 * radius,
-        cy: k === 0 ? 0 : rng.gaussian() * 0.1 * radius,
-        R: R * rng.uniform(0.97, 1.03),
-        wBase: wBase * rng.uniform(0.85, 1.15),
+        cx: placement.cx,
+        cy: placement.cy,
+        R: placement.R,
+        wBase: placement.wBase,
         count: Math.floor(particles * 0.55),
         phi: stainPhi,
-        supply:
-          k === 0
-            ? supply
-            : supply.map((lobe) => ({
-                ...lobe,
-                originTheta: lobe.originTheta + rng.gaussian() * 0.06,
-                arcHalfLength: lobe.arcHalfLength * rng.uniform(0.94, 1.06),
-              })),
+        supply: placement.supply,
         spikes: k === 0 ? bandSpikes : null,
       });
-    }
+    });
   } else {
     addDrop({
       rng: componentRng(0),
@@ -456,29 +512,14 @@ export function buildStain({
       r: radius,
       count: particles,
       phi: stainPhi,
-      spikes:
-        fingerCount > 0
-          ? {
-              azimuths: fingerAzimuths,
-              amps: fingerAzimuths.map(() => splashRng.uniform(0.35, 1.3)),
-              // Cap is geometric, not aesthetic: fingers may reach as long as
-              // the canvas leaves room (wobble 0.09 + amps up to 1.3× fit).
-              amp: Math.min(0.4 * (canvasBound - 1.12), 0.02 + 0.006 * Math.sqrt(We)),
-              sharpness: splashRng.uniform(2.2, 3.5),
-            }
-          : null,
+      spikes,
     });
   }
 
-  // Satellites pinch off the finger tips; dribbles from a set-down cup
-  // scatter around the drip. Placement is clamped from the actual excursion
-  // each droplet can reach, so nothing gets guillotined at the canvas edge.
-  const specs = satelliteSpecsFor(We, fingerAzimuths, splashRng, {
-    bound: canvasBound,
-    scatterDir: stainType === 'mug' ? splashDir : null,
-  });
+  // Placement is clamped from the actual excursion each droplet can reach, so
+  // nothing gets guillotined at the canvas edge.
   const cutoff = speckCutoff(stainPhi);
-  specs.forEach((spec, j) => {
+  satellites.forEach((spec, j) => {
     // Each satellite draws from its own stream: whether THIS one rings or
     // dries as a blob flips with φ (the speck cutoff), and that must not
     // re-roll its neighbors' trails or rings.
@@ -525,18 +566,54 @@ export function buildStain({
     }
   });
 
+  return { splats, washes };
+}
+
+export function buildStain(options = {}) {
+  const {
+    seed,
+    radius = 140,
+    particles = 3500,
+    partialChance = 0.55,
+    canvasBound = DEFAULT_BOUND, // clip radius in units of the parent radius
+    mugSupply = null,
+    splashEnergy = null,
+    phi = null,
+  } = options;
+  // The primary lobe sets the splash azimuth, so the override is read before
+  // any sampler runs and an empty list has nothing to aim at.
+  if (mugSupply !== null && (!Array.isArray(mugSupply) || mugSupply.length === 0)) {
+    throw new TypeError('mugSupply must be a non-empty array of lobes');
+  }
+  // Both are continuous draws when null and NaN geometry three modules later
+  // if garbage gets through. Zero splash is a legal gentle set-down; zero
+  // pigment is no stain at all.
+  if (phi !== null && !(Number.isFinite(phi) && phi > 0)) {
+    throw new RangeError(`phi must be finite and positive, got ${phi}`);
+  }
+  if (splashEnergy !== null && !(Number.isFinite(splashEnergy) && splashEnergy >= 0)) {
+    throw new RangeError(`splashEnergy must be finite and non-negative, got ${splashEnergy}`);
+  }
+  const composition = composeStain(options);
+  const { splats, washes } = emitStain(composition, {
+    seed,
+    radius,
+    particles,
+    partialChance,
+    canvasBound,
+  });
   return {
     splats,
     washes,
     radius,
     seed,
-    type: stainType,
-    phi: stainPhi,
-    supply,
-    splashEnergy: We,
-    splashDir,
-    fingerAzimuths,
-    satellites: specs,
+    type: composition.type,
+    phi: composition.phi,
+    supply: composition.supply,
+    splashEnergy: composition.splashEnergy,
+    splashDir: composition.splashDir,
+    fingerAzimuths: composition.fingerAzimuths,
+    satellites: composition.satellites,
   };
 }
 

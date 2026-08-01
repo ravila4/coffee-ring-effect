@@ -52,7 +52,13 @@ const brew = () => {
   if (anim) anim.destroy();
   const phi = Number(document.getElementById('phi').value);
   seedout.textContent = `seed ${seed} · φ ${phi}`;
-  anim = mountDryingAnimation(stage, { seed, phi });
+  // Dark-field trades wash for grain-scale dots, so it wants more tracers;
+  // held below the static demo's 12k to keep the scrub cache light.
+  anim = mountDryingAnimation(stage, {
+    seed,
+    phi,
+    ...(wantDark ? { darkField: true, particles: 4000 } : {}),
+  });
   window.anim = anim; // headless screenshot hook
 };
 
@@ -63,10 +69,11 @@ document.getElementById('rebrew').addEventListener('click', () => {
 document.getElementById('phi').addEventListener('change', brew);
 
 // ?seed=N&phi=X&at=V for reproducible screenshots; &play=1 starts playback
-// (the component mounts paused).
+// (the component mounts paused); &dark=1 boots into dark-field.
 const q = new URLSearchParams(location.search);
 if (q.has('seed')) seed = Number(q.get('seed'));
 if (q.has('phi')) document.getElementById('phi').value = q.get('phi');
+const wantDark = q.get('dark') === '1';
 brew();
 if (q.has('at')) anim.seek(Number(q.get('at')));
 if (q.has('play')) anim.play();

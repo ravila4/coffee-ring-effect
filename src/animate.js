@@ -127,7 +127,9 @@ export function mountDryingAnimation(container, {
   warpP = 2,
   mainSize = 520,
   plotWidth = 250,
+  darkField = false, // microscope view: white deposits on black, no wash
 } = {}) {
+  let dark = darkField;
   const sim = precompute({ seed, particles, steps, tEnd, diffusion, phi });
   const { frames, deposits, loopDeposits, interiorMode } = sim;
   const tail = deposits.slice(loopDeposits);
@@ -178,8 +180,14 @@ export function mountDryingAnimation(container, {
   playBtn.style.cssText = 'font:inherit;padding:2px 12px;border:1px solid #b9a888;' +
     `background:${PAPER};border-radius:5px;cursor:pointer;color:${INK};`;
   const hud = document.createElement('span');
-  hud.style.cssText = `color:${MUTED};font-variant-numeric:tabular-nums;`;
-  bar.append(playBtn, hud);
+  hud.style.cssText = `color:${MUTED};font-variant-numeric:tabular-nums;flex:1;`;
+  const darkLabel = document.createElement('label');
+  darkLabel.style.cssText = `display:flex;align-items:center;gap:4px;color:${MUTED};cursor:pointer;`;
+  const darkBox = document.createElement('input');
+  darkBox.type = 'checkbox';
+  darkBox.checked = dark;
+  darkLabel.append(darkBox, document.createTextNode('dark-field'));
+  bar.append(playBtn, hud, darkLabel);
   left.append(bar);
 
   const plotH = Math.round((mainSize - 2 * 20 - 2 * 6) / 3);
@@ -238,8 +246,14 @@ export function mountDryingAnimation(container, {
       const d = deposits[i];
       const s = splatStyles[i];
       depCtx.beginPath();
-      depCtx.arc(cx + d.rho * R * Math.cos(d.theta), cy + d.rho * R * Math.sin(d.theta), s.r, 0, 2 * Math.PI);
-      depCtx.fillStyle = `rgba(${s.color.join(',')},${s.alpha})`;
+      if (dark) {
+        // Deegan's binarized micrographs: deposit scatters light.
+        depCtx.arc(cx + d.rho * R * Math.cos(d.theta), cy + d.rho * R * Math.sin(d.theta), Math.max(0.7, s.r * 0.9), 0, 2 * Math.PI);
+        depCtx.fillStyle = 'rgba(255,255,255,0.85)';
+      } else {
+        depCtx.arc(cx + d.rho * R * Math.cos(d.theta), cy + d.rho * R * Math.sin(d.theta), s.r, 0, 2 * Math.PI);
+        depCtx.fillStyle = `rgba(${s.color.join(',')},${s.alpha})`;
+      }
       depCtx.fill();
     }
     drawnDeposits = count;
@@ -256,27 +270,33 @@ export function mountDryingAnimation(container, {
   };
 
   const drawMain = (f, depositTarget) => {
-    mainCtx.clearRect(0, 0, mainSize, mainSize);
+    mainCtx.fillStyle = dark ? '#000' : PAPER;
+    mainCtx.fillRect(0, 0, mainSize, mainSize);
     const drying = v < uSplit;
     const tFrac = Math.min(1, f.t / sim.tEnd);
 
     // Original footprint, always visible so contact-line retreat reads.
-    circle(mainCtx, R, 'rgba(74,59,42,0.18)');
+    circle(mainCtx, R, dark ? 'rgba(210,200,180,0.25)' : 'rgba(74,59,42,0.18)');
 
     if (drying) {
       // The liquid: fades as it dries, shrinks when the line depins.
       mainCtx.beginPath();
       mainCtx.arc(cx, cy, f.base * R, 0, 2 * Math.PI);
-      mainCtx.fillStyle = `rgba(${WASH.join(',')},${(0.16 * (1 - tFrac)).toFixed(3)})`;
+      mainCtx.fillStyle = dark
+        ? `rgba(120,100,80,${(0.14 * (1 - tFrac)).toFixed(3)})`
+        : `rgba(${WASH.join(',')},${(0.16 * (1 - tFrac)).toFixed(3)})`;
       mainCtx.fill();
     }
 
     drawDepositsTo(depositTarget);
     mainCtx.drawImage(depositLayer, 0, 0, mainSize, mainSize);
 
+    const liveStyle = dark ? 'rgba(255,255,255,0.45)' : 'rgba(84,45,12,0.55)';
+    const lineStyle = dark ? 'rgba(220,210,190,0.7)' : 'rgba(138,107,63,0.7)';
+    const dashStyle = dark ? 'rgba(220,210,190,0.45)' : 'rgba(138,107,63,0.5)';
     if (drying) {
       // Live suspension.
-      mainCtx.fillStyle = 'rgba(84,45,12,0.55)';
+      mainCtx.fillStyle = liveStyle;
       const pos = f.pos;
       for (let j = 0; j < pos.length; j += 2) {
         mainCtx.fillRect(
@@ -286,12 +306,12 @@ export function mountDryingAnimation(container, {
           2,
         );
       }
-      circle(mainCtx, f.base * R, 'rgba(138,107,63,0.7)');
-      if (f.innerEdge < f.base - 1e-3) circle(mainCtx, f.innerEdge * R, 'rgba(138,107,63,0.5)', [3, 3]);
+      circle(mainCtx, f.base * R, lineStyle);
+      if (f.innerEdge < f.base - 1e-3) circle(mainCtx, f.innerEdge * R, dashStyle, [3, 3]);
     } else if (v < 1) {
       // Leftovers waiting for the sweep stay visible until the front takes
       // them (drawn at their settled spot — dots barely move, spokes snap).
-      mainCtx.fillStyle = 'rgba(84,45,12,0.55)';
+      mainCtx.fillStyle = liveStyle;
       for (let i = depositTarget; i < deposits.length; i++) {
         const d = deposits[i];
         mainCtx.fillRect(
@@ -305,17 +325,17 @@ export function mountDryingAnimation(container, {
         // The receding film's front, sweeping the interior outside-in.
         const revealed = Math.max(0, depositTarget - loopDeposits - 1);
         const front = tail[Math.min(revealed, tail.length - 1)].rho;
-        circle(mainCtx, front * R, 'rgba(138,107,63,0.5)', [3, 3]);
+        circle(mainCtx, front * R, dashStyle, [3, 3]);
       }
     }
 
     if (!playing) {
       // Click-to-play affordance.
-      mainCtx.fillStyle = 'rgba(74,59,42,0.55)';
+      mainCtx.fillStyle = dark ? 'rgba(220,210,190,0.75)' : 'rgba(74,59,42,0.55)';
       mainCtx.beginPath();
       mainCtx.arc(28, mainSize - 28, 16, 0, 2 * Math.PI);
       mainCtx.fill();
-      mainCtx.fillStyle = PAPER;
+      mainCtx.fillStyle = dark ? '#000' : PAPER;
       mainCtx.beginPath();
       mainCtx.moveTo(23, mainSize - 36);
       mainCtx.lineTo(23, mainSize - 20);
@@ -557,6 +577,19 @@ export function mountDryingAnimation(container, {
     if (wasPlaying && v < 1) play();
   });
 
+  // Same stain, different paint: flipping repaints the deposit layer from
+  // scratch (the two modes disagree about every dot's size and color).
+  const setDark = (on) => {
+    dark = on;
+    darkBox.checked = on;
+    mainC.style.background = on ? '#000' : PAPER;
+    depCtx.clearRect(0, 0, mainSize, mainSize);
+    drawnDeposits = 0;
+    render();
+  };
+  darkBox.addEventListener('change', () => setDark(darkBox.checked));
+  if (dark) mainC.style.background = '#000';
+
   render(); // starts paused: click the drop (or the button) to play
 
   return {
@@ -569,6 +602,7 @@ export function mountDryingAnimation(container, {
       v = Math.min(1, Math.max(0, frac));
       render();
     },
+    setDark,
     play,
     pause,
   };

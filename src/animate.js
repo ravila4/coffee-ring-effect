@@ -196,41 +196,11 @@ function precompute({ seed, particles, steps, tEnd, diffusion, phi }) {
   };
 }
 
-// Everything below is presentation: canvases, the scrubber strip, plots.
-export function mountDryingAnimation(container, {
-  seed = 1,
-  phi = 0.003,
-  particles = 1800,
-  steps = 360,
-  tEnd = 0.97,
-  diffusion = 0.02,
-  duration = 10000, // wall-clock ms for the drying phase
-  sweepDuration = 2200, // ms for the post-dry-out interior sweep
-  warpP = 2,
-  mainSize = 520,
-  plotWidth = 250,
-  darkField = false, // microscope view: white deposits on black, no wash
-} = {}) {
-  let dark = darkField;
-  const sim = precompute({ seed, particles, steps, tEnd, diffusion, phi });
-  const { frames, deposits, loopDeposits, interiorMode } = sim;
-  const tail = deposits.slice(loopDeposits);
-  const depositRho = Float64Array.from(deposits, (d) => d.rho);
-  const ones = new Uint8Array(Math.max(particles, deposits.length)).fill(1);
-  const dpr = Math.min(2, (typeof devicePixelRatio !== 'undefined' && devicePixelRatio) || 1);
-
-  // Deposit splat styles are fixed at mount so scrubbing is deterministic.
-  // The ×3 on alpha is this view's own: it composites source-over with no
-  // wash underlay, so it needs about three times the ink of the static render
-  // to reach the same visual weight.
-  const styleRng = makeRng((seed ^ 0x5eed) >>> 0);
-  const splatStyles = deposits.map((d) => ({
-    r: (d.pinned ? 1 : 1.3) * (0.6 + 0.8 * styleRng.random()),
-    alpha: (d.pinned ? 0.06 + 0.07 * styleRng.random() : 0.05 + 0.05 * styleRng.random()) * 3,
-    color: RING_COLORS[styleRng.int(RING_COLORS.length)],
-  }));
-
-  // --- DOM scaffold (inline styles so the blog embed needs no stylesheet) ---
+// Static structure of the widget: the drop over its scrubber and control bar
+// on the left, three stacked plots on the right. Inline styles so the blog
+// embed needs no stylesheet. Returns the pieces the painters and handlers
+// need, plus the offscreen layer the deposit accumulates on.
+function buildScaffold(container, { mainSize, plotWidth, dpr, dark }) {
   const root = document.createElement('div');
   root.style.cssText = `display:flex;gap:14px;align-items:flex-start;color:${INK};` +
     'font:12px/1.4 -apple-system,"Helvetica Neue",sans-serif;';
@@ -291,6 +261,59 @@ export function mountDryingAnimation(container, {
 
   container.append(root);
 
+  // Deposits are permanent, so they accumulate on their own layer and get
+  // blitted under the live particles instead of being redrawn every frame.
+  const depositLayer = document.createElement('canvas');
+  depositLayer.width = mainSize * dpr;
+  depositLayer.height = mainSize * dpr;
+  const depCtx = depositLayer.getContext('2d');
+  depCtx.scale(dpr, dpr);
+
+  return {
+    root, mainC, mainCtx, scrubC, scrubCtx, playBtn, hud, darkBox,
+    histCtx, fracCtx, radCtx, plotH, depositLayer, depCtx,
+  };
+}
+
+// Everything below is presentation: canvases, the scrubber strip, plots.
+export function mountDryingAnimation(container, {
+  seed = 1,
+  phi = 0.003,
+  particles = 1800,
+  steps = 360,
+  tEnd = 0.97,
+  diffusion = 0.02,
+  duration = 10000, // wall-clock ms for the drying phase
+  sweepDuration = 2200, // ms for the post-dry-out interior sweep
+  warpP = 2,
+  mainSize = 520,
+  plotWidth = 250,
+  darkField = false, // microscope view: white deposits on black, no wash
+} = {}) {
+  let dark = darkField;
+  const sim = precompute({ seed, particles, steps, tEnd, diffusion, phi });
+  const { frames, deposits, loopDeposits, interiorMode } = sim;
+  const tail = deposits.slice(loopDeposits);
+  const depositRho = Float64Array.from(deposits, (d) => d.rho);
+  const ones = new Uint8Array(Math.max(particles, deposits.length)).fill(1);
+  const dpr = Math.min(2, (typeof devicePixelRatio !== 'undefined' && devicePixelRatio) || 1);
+
+  // Deposit splat styles are fixed at mount so scrubbing is deterministic.
+  // The ×3 on alpha is this view's own: it composites source-over with no
+  // wash underlay, so it needs about three times the ink of the static render
+  // to reach the same visual weight.
+  const styleRng = makeRng((seed ^ 0x5eed) >>> 0);
+  const splatStyles = deposits.map((d) => ({
+    r: (d.pinned ? 1 : 1.3) * (0.6 + 0.8 * styleRng.random()),
+    alpha: (d.pinned ? 0.06 + 0.07 * styleRng.random() : 0.05 + 0.05 * styleRng.random()) * 3,
+    color: RING_COLORS[styleRng.int(RING_COLORS.length)],
+  }));
+
+  const {
+    root, mainC, mainCtx, scrubC, scrubCtx, playBtn, hud, darkBox,
+    histCtx, fracCtx, radCtx, plotH, depositLayer, depCtx,
+  } = buildScaffold(container, { mainSize, plotWidth, dpr, dark });
+
   // --- playback state ---
   // The position runs over the whole wall-clock timeline; the first uSplit of
   // it is the (time-warped) drying, the remainder the interior sweep.
@@ -309,12 +332,6 @@ export function mountDryingAnimation(container, {
   const R = mainSize * 0.42;
   const cx = mainSize / 2;
   const cy = mainSize / 2;
-
-  const depositLayer = document.createElement('canvas');
-  depositLayer.width = mainSize * dpr;
-  depositLayer.height = mainSize * dpr;
-  const depCtx = depositLayer.getContext('2d');
-  depCtx.scale(dpr, dpr);
 
   const frameFor = (u) => frames[frameIndexFor(u, frames.length, warpP)];
 

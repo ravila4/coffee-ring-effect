@@ -14,14 +14,9 @@
 import { forkSeed, makeRng, mulberry32 } from './rng.js';
 import { createNoise2D, fbm, smoothstep } from './noise.js';
 import { makeContactLine, makeSpikeField } from './contour.js';
+import { RING_COLORS, WASH_COLOR } from './palette.js';
 import { makeSupplySampler, simulateBand, simulateDrop, widthFactor } from './physics.js';
 
-const RING_COLORS = [
-  [110, 62, 20],
-  [140, 88, 36],
-  [84, 45, 12],
-];
-const WASH_COLOR = [172, 122, 62];
 // Tracer count the alpha palette was tuned at. The count is numerical
 // resolution, not physics — the coffee's pigment is set by phi — so pigment
 // splats normalize their alpha against this baseline. Dark-field ignores

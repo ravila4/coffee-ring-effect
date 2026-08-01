@@ -131,6 +131,46 @@ export function pickWeightedBin(weights, rng) {
   return weights.length - 1;
 }
 
+// Where a severed line re-pins is azimuthally heterogeneous: weak sectors
+// keep receding before they anchor — spatially incomplete repinning, the
+// difference between closed tree-ring multirings and the broken arcs and
+// webs of Figs. 9/18. Strength in [0,1] from low harmonics with random
+// phases: the line's |q| capillary stiffness low-pass filters the defect
+// disorder, so only long-wavelength weakness expresses (amplitudes fall as
+// k^(-1/2), the elastic response to white disorder; k=1 is a rigid
+// off-center shift — Fig. 18's inner rings are visibly eccentric).
+// Normalized, then contrast-shaped so wide arcs sit at the extremes —
+// fully anchored fragments and true gaps, tapering between. Without the
+// shaping the field hugs mid-strength and every sector catches at least
+// the epoch's early deposits: the fence closes into a ring again.
+// A parent epoch's field carries 60% of the blend: the anchoring landscape
+// persists across epochs, so the same weak azimuths keep receding — the
+// radial vein channels that let the web cross rings. Independent fields
+// give broken rings whose gaps never line up.
+export function makeAnchorField(rng, nBins = NBINS, parent = null) {
+  const modes = [];
+  for (let k = 1; k <= 6; k++) {
+    modes.push({ k, a: Math.pow(k, -0.5) * rng.uniform(0.6, 1.4), ph: rng.uniform(0, TWO_PI) });
+  }
+  const s = new Float64Array(nBins);
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (let b = 0; b < nBins; b++) {
+    const th = ((b + 0.5) / nBins) * TWO_PI;
+    let v = 0;
+    for (const m of modes) v += m.a * Math.cos(m.k * th + m.ph);
+    s[b] = v;
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+  }
+  for (let b = 0; b < nBins; b++) {
+    const fresh = (s[b] - lo) / (hi - lo || 1);
+    const blended = parent ? 0.6 * parent[b] + 0.4 * fresh : fresh;
+    s[b] = smoothstepLocal(0.2, 0.8, blended);
+  }
+  return s;
+}
+
 // Below this effective concentration there are too few particles to arrest a
 // growing hole ("insufficient number of particles to stop the contact line"),
 // so the severed line never re-pins: the drop ends in free recession and the
@@ -230,7 +270,37 @@ export function settleInterior({
 }) {
   const sorted = [...items].sort((a, b) => b.rho - a.rho);
   if (sorted.length === 0) return { deposits: [], cuspLevels: [] };
-  const arcSpacing = 0.05 + 0.04 * rng.random();
+  // Stick-slip rest arcs are local: a receding arc catches over a finite
+  // angular window at a radius its neighbours don't share — Figs. 9/18 show
+  // broken arcs and webs, hardly any closed inner ring. A disk-wide rest
+  // ladder here rendered as tree growth rings. Fragments are created lazily
+  // by the sweep and reused by later particles landing within reach, so
+  // arc coherence is per-sector, not per-circle.
+  const arcCapture = 0.02 + 0.015 * rng.random();
+  const arcFragments = [];
+  const settleArc = (p) => {
+    let best = null;
+    let bestD = Infinity;
+    for (const f of arcFragments) {
+      let off = Math.abs(wrap(p.theta) - wrap(f.theta));
+      if (off > Math.PI) off = TWO_PI - off;
+      if (off > f.halfWidth) continue;
+      const d = Math.abs(p.rho - f.rho);
+      if (d < arcCapture && d < bestD) {
+        bestD = d;
+        best = f;
+      }
+    }
+    if (!best) {
+      // Always seed a fragment: a creation coin flip made the realized
+      // arc/dot split a function of particle count (more particles → more
+      // joins → fewer silent dots), breaking "tracer count is resolution".
+      // An isolated single-particle fragment reads as a dot anyway.
+      best = { rho: p.rho, theta: p.theta, halfWidth: rng.uniform(0.25, 0.8) };
+      arcFragments.push(best);
+    }
+    return clamp01(best.rho + rng.gaussian() * 0.002);
+  };
   const rho0 = Math.max(sorted[0].rho, 0.1);
   const cuspLevels = traceCuspFront({ rho0, spacing: cuspSpacing, wander: cuspWander, rng });
   const levelAt = (rho) => {
@@ -268,9 +338,8 @@ export function settleInterior({
           : sign * -(spacingHere * 0.12) * Math.log(1 - rng.random());
       deposits.push({ rho: p.rho, theta: best + offset, t: tEnd, pinned: false, sink });
     } else if (sink === 'arc') {
-      const level = clamp01(Math.round(p.rho / arcSpacing) * arcSpacing + rng.gaussian() * 0.002);
       deposits.push({
-        rho: level,
+        rho: settleArc(p),
         theta: p.theta + rng.gaussian() * 0.01,
         t: tEnd,
         pinned: false,
@@ -322,6 +391,8 @@ export function makeDropStepper({
   if (!rng) throw new Error('makeDropStepper requires a seeded rng');
 
   const dt = tEnd / steps;
+  // Slosh diffusion normalized to the 300-step reference calibration.
+  const sloshKick = 0.3 * Math.sqrt(dt / (0.98 / 300));
   const rho = new Float64Array(particles);
   const theta = new Float64Array(particles);
   const alive = new Uint8Array(particles).fill(1);
@@ -343,12 +414,18 @@ export function makeDropStepper({
   const phiEffAt = (tStart) =>
     Math.min(PACKING, (phi * (aliveCount / particles)) / (1 - tStart));
 
-  const newEpoch = (base, tStart, thetaEpoch) => ({
+  const newEpoch = (base, tStart, thetaEpoch, parentAnchors = null) => ({
     base,
     tStart,
     thetaEpoch,
     phiEff: phiEffAt(tStart),
     growth: makeRingGrowth({ phi: phiEffAt(tStart) }),
+    // The first epoch is the outer rim — always a complete circle. Re-pinned
+    // epochs anchor sector-wise: weak sectors sit deeper (relief) and let go
+    // partway through the epoch (the hold gate in the particle loop), so
+    // inner fences come out as broken, wavy arcs instead of tree rings.
+    anchors: tStart === 0 ? null : makeAnchorField(rng, NBINS, parentAnchors),
+    anchorRelief: tStart === 0 ? 0 : base * rng.uniform(0.04, 0.1),
     holes: [],
     tOnset: null,
     wAtDepin: null,
@@ -451,6 +528,8 @@ export function makeDropStepper({
       tOnset: epoch.tOnset,
       rBase: epoch.base,
       rNext,
+      anchors: epoch.anchors,
+      anchorRelief: epoch.anchorRelief,
       wAtDepin: epoch.wAtDepin,
       wAtEnd: epoch.growth.w,
       thetaEpoch: epoch.thetaEpoch,
@@ -547,9 +626,23 @@ export function makeDropStepper({
           return;
         }
         const thetaEpoch = Math.min(1, (1 - t) / Math.pow(rNext, 3));
-        epoch = newEpoch(rNext, t, thetaEpoch);
+        epoch = newEpoch(rNext, t, thetaEpoch, epoch.anchors);
         s++;
         return; // rebuild bins next step under the new epoch
+      }
+    }
+
+    // Sector relief: weak-anchor sectors re-pinned deeper, strong sectors
+    // caught slightly outside the mean. Centered on 1/2 so rNext stays the
+    // azimuthal MEAN catching radius — one-sided relief (1 − s) shifted
+    // every re-pinned ring inward by half the amplitude, silently re-tuning
+    // the calibrated retreat draw. Applied after the sever test, which
+    // measures hole coverage against the unrelieved base.
+    if (epoch.anchors) {
+      for (let b = 0; b < NBINS; b++) {
+        const d = epoch.anchorRelief * (0.5 - epoch.anchors[b]);
+        kappaBins[b] -= d;
+        floorBins[b] -= d;
       }
     }
 
@@ -579,7 +672,14 @@ export function makeDropStepper({
         // maps to hold time linearly: steeper maps (strength², A/B-tested)
         // release the moderate arcs that carry most of the rim and bleach
         // the ring wholesale.
-        if (!pinningAt || t < pinningAt(theta[i]) * tEnd) {
+        // Anchor strength is the fraction of the epoch a fence sector holds
+        // before releasing — the same linear strength→hold-time map as
+        // partial rims, so fence gaps taper instead of stepping, and the
+        // weakest sectors never anchor at all (the fence's true gaps).
+        const anchorHolds =
+          !epoch.anchors ||
+          t < epoch.tStart + epoch.anchors[bin] * (tEnd - epoch.tStart);
+        if (anchorHolds && (!pinningAt || t < pinningAt(theta[i]) * tEnd)) {
           // Jammed at the growing solid-liquid interface — on the arrest
           // contour where a hole is still deepening (the snowplow).
           alive[i] = 0;
@@ -594,9 +694,13 @@ export function makeDropStepper({
         } else {
           // Locally receding line: swept back into the liquid, measured
           // inward from the interface (not the contact line — at high φ that
-          // would land inside the solid ring), sloshed along the rim.
+          // would land inside the solid ring), sloshed along the rim. The
+          // kick scales as √dt: re-offers happen once per step, so an
+          // unscaled kick makes slosh diffusion (and how far released
+          // particles migrate before re-pinning) a function of step count —
+          // render, animation, and tests all use different counts.
           rho[i] = interface_ * (1 - 0.02 - 0.05 * rng.random());
-          theta[i] += rng.gaussian() * 0.3;
+          theta[i] += rng.gaussian() * sloshKick;
         }
       } else {
         rho[i] = r;

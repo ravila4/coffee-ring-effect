@@ -10,6 +10,7 @@ import {
   depinOnset,
   chooseInteriorSink,
   settleInterior,
+  makeAnchorField,
 } from '../src/physics.js';
 import { makeRng } from '../src/rng.js';
 
@@ -549,15 +550,132 @@ test('cusps wander continuously — veins wiggle, never teleport', () => {
   assert.ok(maxStep > 0.005, `cusps frozen: max inter-level drift ${maxStep}`);
 });
 
-test('arc-forced interior quantizes radii onto few rest levels', () => {
+test('arc rest radii are local fragments, not a disk-wide ladder', () => {
+  // Fig. 9/18 interiors are broken arcs and webs with hardly any closed
+  // inner ring. A shared rest-radius ladder renders as tree growth rings,
+  // so rest levels across the disk must be irregularly spaced.
   const rng = makeRng(303);
-  const items = Array.from({ length: 300 }, () => ({
+  const items = Array.from({ length: 600 }, () => ({
     rho: rng.uniform(0.2, 0.9),
     theta: rng.uniform(0, 2 * Math.PI),
   }));
   const { deposits } = settleInterior({ items, total: 3000, tEnd: 0.98, rng, forceSink: 'arc' });
-  const levels = new Set(deposits.map((d) => Math.round(d.rho * 200)));
-  assert.ok(levels.size < 40, `${levels.size} distinct radius levels — not quantized`);
+  const arcs = deposits.filter((d) => d.sink === 'arc');
+  assert.ok(arcs.length > 100, `too few arc deposits to judge: ${arcs.length}`);
+  const centers = new Set(arcs.map((d) => Math.round(d.rho * 100)));
+  // The old ladder collapsed the disk onto ~10 shared levels; local
+  // fragments put rest radii nearly everywhere.
+  assert.ok(centers.size > 35, `${centers.size} levels — still a global ladder`);
+});
+
+test('particles at one radius settle onto several angularly bounded arcs, and nearby particles share one', () => {
+  const rng = makeRng(305);
+  const ring = Array.from({ length: 400 }, () => ({
+    rho: 0.6 + rng.uniform(-0.01, 0.01),
+    theta: rng.uniform(0, 2 * Math.PI),
+  }));
+  const { deposits } = settleInterior({ items: ring, total: 3000, tEnd: 0.98, rng, forceSink: 'arc' });
+  const arcs = deposits.filter((d) => d.sink === 'arc');
+  const levels = new Set(arcs.map((d) => Math.round(d.rho * 400)));
+  assert.ok(levels.size >= 3, `one shared level (${levels.size}) — a closed tree ring`);
+  assert.ok(levels.size < 60, `${levels.size} levels for 400 same-radius particles — no arc coherence`);
+});
+
+test('anchor fields are smooth, normalized, sector-scale relief', () => {
+  const s = makeAnchorField(makeRng(801));
+  assert.equal(s.length, 512);
+  let lo = Infinity;
+  let hi = -Infinity;
+  let maxStep = 0;
+  let crossings = 0;
+  for (let b = 0; b < s.length; b++) {
+    const next = s[(b + 1) % s.length];
+    lo = Math.min(lo, s[b]);
+    hi = Math.max(hi, s[b]);
+    maxStep = Math.max(maxStep, Math.abs(next - s[b]));
+    if ((s[b] - 0.5) * (next - 0.5) < 0) crossings++;
+  }
+  assert.ok(lo < 0.01 && hi > 0.99, `not normalized to [0,1]: [${lo}, ${hi}]`);
+  // Contrast shaping steepens tapers; a transition should still span many
+  // bins (a hard step would jump by ~1 in one bin).
+  assert.ok(maxStep < 0.12, `jagged at bin scale: step ${maxStep}`);
+  assert.ok(crossings >= 2 && crossings <= 16, `${crossings} midline crossings — wrong sector scale`);
+  // Centered relief needs the field to sit near mean 1/2, else rNext stops
+  // being the mean catching radius and the ring ladder drifts inward.
+  let mean = 0;
+  for (let b = 0; b < s.length; b++) mean += s[b];
+  mean /= s.length;
+  assert.ok(Math.abs(mean - 0.5) < 0.12, `field mean ${mean.toFixed(3)} — relief biased`);
+});
+
+test('anchor weakness persists between epochs — vein channels cross rings', () => {
+  // tEnd 0.995: the third epoch needs the drying tail to fire.
+  const { events } = simulateDrop({ particles: 6000, phi: 0.005, tEnd: 0.995, rng: makeRng(807) });
+  const anchored = events.filter((e) => e.anchors);
+  assert.ok(anchored.length >= 2, `need two re-pinned epochs, got ${anchored.length}`);
+  const [a, b] = anchored;
+  let ma = 0;
+  let mb = 0;
+  for (let k = 0; k < 512; k++) {
+    ma += a.anchors[k];
+    mb += b.anchors[k];
+  }
+  ma /= 512;
+  mb /= 512;
+  let cov = 0;
+  let va = 0;
+  let vb = 0;
+  for (let k = 0; k < 512; k++) {
+    cov += (a.anchors[k] - ma) * (b.anchors[k] - mb);
+    va += (a.anchors[k] - ma) ** 2;
+    vb += (b.anchors[k] - mb) ** 2;
+  }
+  const corr = cov / Math.sqrt(va * vb || 1);
+  assert.ok(corr > 0.25, `successive anchor fields uncorrelated (r=${corr.toFixed(2)}) — no web, only broken rings`);
+});
+
+test('re-pinned epochs carry an anchor field; the first epoch (the rim) does not', () => {
+  const { events } = simulateDrop({ particles: 6000, phi: 0.005, rng: makeRng(802) });
+  assert.ok(events.length >= 2, `need a re-pinned epoch, got ${events.length}`);
+  assert.equal(events[0].anchors, null);
+  assert.equal(events[0].anchorRelief, 0);
+  for (const e of events.slice(1)) {
+    assert.ok(e.anchors && e.anchors.length === 512, 'missing anchor field');
+    assert.ok(e.anchorRelief > 0.01 * e.rBase, `no relief amplitude: ${e.anchorRelief}`);
+  }
+});
+
+test('inner-fence deposits favor strong-anchor sectors (gaps where the line never held)', () => {
+  const { deposits, events } = simulateDrop({ particles: 9000, phi: 0.005, rng: makeRng(806) });
+  assert.ok(events.length >= 2);
+  const e2 = events[1];
+  // Deposits pinned at the second epoch's fence: inside its base, after its start.
+  const fence = deposits.filter(
+    (d) => d.pinned && d.rho < e2.rBase + 0.01 && d.rho > e2.rBase - e2.anchorRelief - 0.1,
+  );
+  assert.ok(fence.length > 150, `too few fence deposits to judge: ${fence.length}`);
+  const NB = 64;
+  const counts = new Array(NB).fill(0);
+  for (const d of fence) counts[Math.floor((normalizeTheta(d.theta) / (2 * Math.PI)) * NB)]++;
+  const anchorAt = (b64) => e2.anchors[Math.floor(((b64 + 0.5) / NB) * 512)];
+  let occ = 0;
+  let occN = 0;
+  let empty = 0;
+  let emptyN = 0;
+  for (let b = 0; b < NB; b++) {
+    if (counts[b] > 0) {
+      occ += anchorAt(b);
+      occN++;
+    } else {
+      empty += anchorAt(b);
+      emptyN++;
+    }
+  }
+  assert.ok(emptyN >= 3, `fence closed all the way round (${emptyN} empty sectors) — tree ring`);
+  assert.ok(
+    occ / occN > empty / emptyN + 0.08,
+    `deposits ignore anchors: occupied ${(occ / occN).toFixed(2)} vs empty ${(empty / emptyN).toFixed(2)}`,
+  );
 });
 
 test('dot-forced interior stays near original positions', () => {
@@ -649,9 +767,19 @@ test('interiorSink override forces the mode end-to-end', () => {
     rng: makeRng(309),
   });
   const residue = deposits.filter((d) => !d.pinned && d.rho > 0.05);
-  const levels = new Set(residue.map((d) => Math.round(d.rho * 200)));
   assert.ok(residue.length > 100, `too little residue: ${residue.length}`);
-  assert.ok(levels.size < residue.length / 4, `radii not quantized: ${levels.size}/${residue.length}`);
+  // Forced arcs settle on fragments ('arc') or strand as dots when no
+  // fragment is in reach — never spokes.
+  for (const d of residue) assert.ok(d.sink === 'arc' || d.sink === 'dot', `sink ${d.sink}`);
+  const arcs = residue.filter((d) => d.sink === 'arc');
+  assert.ok(arcs.length > residue.length / 2, `arc sink degraded to dots wholesale: ${arcs.length}`);
+  // Fragment reuse: some rest radii are shared by several particles.
+  const perLevel = new Map();
+  for (const d of arcs) {
+    const k = Math.round(d.rho * 200);
+    perLevel.set(k, (perLevel.get(k) ?? 0) + 1);
+  }
+  assert.ok([...perLevel.values()].some((n) => n >= 4), 'no shared rest arcs — no coherence');
 });
 
 // --- mug ring (unchanged API this slice) ---

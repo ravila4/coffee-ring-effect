@@ -219,3 +219,14 @@ test('a droplet spec throws off no satellites', () => {
     }
   }
 });
+
+test('the public entry rejects an empty mug supply like buildStain does', () => {
+  assert.throws(
+    () => createStain({ type: 'mug', seed: 1, mugSupply: [] }),
+    /mugSupply/,
+  );
+  assert.throws(
+    () => createStain({ type: 'mug', seed: 1, mugSupply: 'lobes' }),
+    /mugSupply/,
+  );
+});

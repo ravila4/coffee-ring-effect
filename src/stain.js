@@ -167,6 +167,21 @@ export function composeStain({
   canvasBound = DEFAULT_BOUND, // clip radius in units of the parent radius
   phi = null, // pigment concentration; continuous draw when null
 } = {}) {
+  // The primary lobe sets the splash azimuth, so the override is read before
+  // any sampler runs and an empty list has nothing to aim at. Guarded here so
+  // every entry — buildStain and the texture API alike — gets the same door.
+  if (mugSupply !== null && (!Array.isArray(mugSupply) || mugSupply.length === 0)) {
+    throw new TypeError('mugSupply must be a non-empty array of lobes');
+  }
+  // Both are continuous draws when null and NaN geometry three modules later
+  // if garbage gets through. Zero splash is a legal gentle set-down; zero
+  // pigment is no stain at all.
+  if (phi !== null && !(Number.isFinite(phi) && phi > 0)) {
+    throw new RangeError(`phi must be finite and positive, got ${phi}`);
+  }
+  if (splashEnergy !== null && !(Number.isFinite(splashEnergy) && splashEnergy >= 0)) {
+    throw new RangeError(`splashEnergy must be finite and non-negative, got ${splashEnergy}`);
+  }
   const rng = makeRng(seed);
   const splashRng = makeRng(forkSeed(seed, 1));
   const stainType = type === 'auto' ? (rng.random() < mugChance ? 'mug' : 'drop') : type;
@@ -633,24 +648,7 @@ export function buildStain(options = {}) {
     particles = 3500,
     partialChance = 0.55,
     canvasBound = DEFAULT_BOUND, // clip radius in units of the parent radius
-    mugSupply = null,
-    splashEnergy = null,
-    phi = null,
   } = options;
-  // The primary lobe sets the splash azimuth, so the override is read before
-  // any sampler runs and an empty list has nothing to aim at.
-  if (mugSupply !== null && (!Array.isArray(mugSupply) || mugSupply.length === 0)) {
-    throw new TypeError('mugSupply must be a non-empty array of lobes');
-  }
-  // Both are continuous draws when null and NaN geometry three modules later
-  // if garbage gets through. Zero splash is a legal gentle set-down; zero
-  // pigment is no stain at all.
-  if (phi !== null && !(Number.isFinite(phi) && phi > 0)) {
-    throw new RangeError(`phi must be finite and positive, got ${phi}`);
-  }
-  if (splashEnergy !== null && !(Number.isFinite(splashEnergy) && splashEnergy >= 0)) {
-    throw new RangeError(`splashEnergy must be finite and non-negative, got ${splashEnergy}`);
-  }
   const composition = composeStain(options);
   const { splats, washes } = scaleStain(
     emitStain(composition, { particles, partialChance, canvasBound }),

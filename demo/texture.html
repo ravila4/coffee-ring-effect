@@ -56,16 +56,20 @@ import { createStain, paintStains } from '../src/coffee-stains.js';
 const mug = createStain({ type: 'mug', seed: 42, phi: 0.008, particles: 9000 });
 // A droplet is a small drop that landed gently: no splash to finger, no
 // satellites. Strong coffee (phi) keeps a 15 px drip legible; left to draw its
-// own, a weak one dries to almost nothing. Opacity does the fading — a stain
-// starved of tracers paints lighter as well as coarser.
+// own, a weak one dries to almost nothing.
 const droplet = (seed) => createStain({ type: 'drop', seed, phi: 0.012, particles: 1800, splashEnergy: 0 });
 
+// The same opacity on every placement. Painting is ink-conserving at every
+// size, so a 9 px drip and a 172 px mug ring arrive at the same density on
+// their own; all this number says is how strongly coffee shows through paper.
+const INK = 0.65;
+
 paintStains(document.getElementById('stains').getContext('2d'), [
-  { stain: mug, x: 520, y: 320, radius: 172, opacity: 0.7, rotation: 0.4 },
-  { stain: droplet(7), x: 170, y: 305, radius: 29, opacity: 0.5 },
-  { stain: droplet(11), x: 262, y: 486, radius: 15, opacity: 0.38, rotation: 1.2 },
-  { stain: droplet(19), x: 706, y: 548, radius: 34, opacity: 0.5, rotation: 2.4 },
-  { stain: droplet(23), x: 116, y: 590, radius: 9, opacity: 0.3 },
+  { stain: mug, x: 520, y: 320, radius: 172, opacity: INK, rotation: 0.4 },
+  { stain: droplet(7), x: 170, y: 305, radius: 29, opacity: INK },
+  { stain: droplet(11), x: 262, y: 486, radius: 15, opacity: INK, rotation: 1.2 },
+  { stain: droplet(19), x: 706, y: 548, radius: 34, opacity: INK, rotation: 2.4 },
+  { stain: droplet(23), x: 116, y: 590, radius: 9, opacity: INK },
 ]);
 </script>
 </body>

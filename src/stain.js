@@ -617,18 +617,45 @@ export function emitStain(composition, { particles, partialChance, canvasBound }
 // multiply, because each carries a minimum in device pixels — a deposit
 // thinner than a pixel vanishes at small render sizes, which is
 // display-resolution physics, not stain physics, so the floor can only be
-// applied once the radius is known. Every law is linear in r, so a splat's
-// share of the ink is the same at any radius the floor does not bite at.
+// applied once the radius is known.
 //   grain    pigment from the sim, sized off the shared splat base
 //   speck    a ligament fragment, its own radius floored at half a pixel
 //   droplet  a satellite blob, far enough above the floor to skip it
+// Only grain answers to a caller-chosen size. A speck is a ligament fragment
+// and a droplet a satellite blob: both are physical geometry the splash model
+// worked out, and resizing them would move the splash. A grain is the
+// resolution the pigment is painted at, which is a rendering choice.
 const SIZE_LAWS = {
-  grain: (r, radius) => Math.max(0.8, radius * 0.016) * r,
+  grain: (r, radius, grainBase) => grainBase * r,
   speck: (r, radius) => Math.max(0.5, radius * r),
   droplet: (r, radius) => radius * r,
 };
 
-export function scaleStain({ splats, washes }, radius) {
+// Wherever a law paints a splat wider than radius × r, the extra area is ink
+// the stain never had. Ink is area × alpha, so painting k times too wide at
+// unchanged alpha multiplies the pigment by k²: under radius 50 the grain
+// floor does exactly that, and a stain painted at 9 px comes out a saturated
+// dot rather than a ring. Each law returns the alpha that holds the product
+// fixed instead, which also makes a caller-chosen grain a change of texture
+// and not of weight.
+//
+// Ink ∝ area × alpha is a first-order model: exact for an isolated splat at
+// low alpha, approximate once splats overlap and multiply compositing carries
+// alpha toward 1, where two half-covered pixels stop summing like one full one.
+const INK_LAWS = {
+  // Only grain can be asked to paint finer than its law, so only grain can run
+  // out of alpha to spend for the area it gave up. Opacity stops at 1.
+  grain: (alpha, r, radius, grainBase) => Math.min(1, alpha * ((radius * 0.016) / grainBase) ** 2),
+  speck: (alpha, r, radius) => alpha * ((radius * r) / Math.max(0.5, radius * r)) ** 2,
+  droplet: (alpha) => alpha,
+};
+
+// grain is a fleck size in device pixels, where every other length crossing
+// this module is a fraction of the stain's own radius. That break is
+// deliberate: the case it exists for — flecks that hold one size while the
+// stains carrying them change size, the way marks on a real desk do — has no
+// expression as a fraction of a radius that is itself the thing varying.
+export function scaleStain({ splats, washes }, radius, { grain } = {}) {
   // ctx.arc silently returns on non-finite input, so a bad radius would not
   // crash — it would paint nothing, invisibly. Every path to pixels funnels
   // through here, which makes this the one door worth locking.
@@ -636,12 +663,22 @@ export function scaleStain({ splats, washes }, radius) {
     throw new RangeError(`radius must be finite and positive, got ${radius}`);
   }
   const scalePoints = (pts) => pts.map((p) => ({ x: p.x * radius, y: p.y * radius }));
+  const grainDefault = Math.max(0.8, radius * 0.016);
+  const grainBase = Math.max(0.8, grain ?? radius * 0.016);
   return {
     splats: splats.map((s) => {
       const size = SIZE_LAWS[s.sizing];
-      const scaled = { x: s.x * radius, y: s.y * radius, r: size(s.r, radius) };
-      if (s.rInk !== undefined) scaled.rInk = size(s.rInk, radius);
-      return { ...scaled, alpha: s.alpha, color: s.color };
+      const scaled = { x: s.x * radius, y: s.y * radius, r: size(s.r, radius, grainBase) };
+      if (s.rInk !== undefined) scaled.rInk = size(s.rInk, radius, grainBase);
+      // What the law on its own would have painted, carried through so a
+      // reader that measures grain geometry can size off the law rather than
+      // off whatever the caller painted with.
+      if (s.sizing === 'grain') scaled.rDefault = grainDefault * s.r;
+      return {
+        ...scaled,
+        alpha: INK_LAWS[s.sizing](s.alpha, s.r, radius, grainBase),
+        color: s.color,
+      };
     }),
     washes: washes.map((w) => ({
       points: scalePoints(w.points),

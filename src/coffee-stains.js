@@ -20,12 +20,15 @@
 // it owns the canvas it hands back.)
 //
 // There is no droplet type. A droplet is a small 'drop' that landed gently:
-// few particles (~300–600) and low or zero splashEnergy, because a 20 px speck
-// with its own satellite field reads as a splatter rather than a drip. The two
-// counts are easy to confuse:
-//   particles  resolution — how finely the drying is sampled. More costs time
-//              and buys structure, not ink: splat alpha normalizes against the
-//              tracer count, so painted mass holds steady as the count moves.
+// few particles (~300–600 for a mark a few pixels across) and low or zero
+// splashEnergy, because a 20 px speck with its own satellite field reads as a
+// splatter rather than a drip. The two counts are easy to confuse:
+//   particles  resolution — how finely the drying is sampled. Splat alpha
+//              normalizes against the tracer count, so past ~1750 tracers more
+//              particles cost time and buy structure, not ink. Below that the
+//              normalization hits its cap and the stain paints lighter as well
+//              as coarser: a droplet big enough to read as a ring wants the
+//              tracers even though its footprint is small.
 //   phi        pigment — how strong the coffee is. This is the knob for a
 //              darker, broader, or sparser stain.
 

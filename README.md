@@ -1,8 +1,40 @@
 # coffee-ring-effect
 
-Procedural coffee stains from a particle simulation of the coffee-ring physics (Deegan et al.). A stain renders once to a canvas in 40 to 120 ms and is reused as a static image after that, so generation cost never recurs. Every stain is a pure function of its seed. No dependencies.
+Procedural coffee stains from a particle simulation of the coffee-ring physics (Deegan et al.), for use as texture on a page. A stain is generated once, in 40 to 120 ms, and painted as often as you like after that. Every stain is a pure function of its seed. No dependencies, no build step: import the module by path.
 
 ![Six procedurally generated coffee stains in the demo grid: mug rings, a crescent, and splashed drops with scalloped dark rims and satellite specks](docs/demo-grid.png)
+
+## Use
+
+```js
+import { createStain, paintStains } from './src/coffee-stains.js';
+
+const mug = createStain({ type: 'mug', seed: 42, phi: 0.008, particles: 5000 });
+const droplet = createStain({ type: 'drop', seed: 7, particles: 400, splashEnergy: 0 });
+
+paintStains(ctx, [
+  { stain: mug, x: 420, y: 260, radius: 180, opacity: 0.55, rotation: 0.1 },
+  { stain: droplet, x: 130, y: 90, radius: 24, opacity: 0.4 },
+]);
+```
+
+`createStain` runs the simulation and returns plain serializable data in units of the stain's own radius — cache it, ship it as JSON, paint it at any size. `paintStains` places it: array order, one save/restore per placement, `opacity` on `globalAlpha`, multiply blend unless you pass `{ composite }`.
+
+Knobs: `type` ('drop' or 'mug'), `phi` (concentration — low gives sparse spoked interiors, high gives broad rims), `splashEnergy` (Weber-number stand-in; high values finger and splatter), `particles` (resolution, not ink). A droplet is not a third type: it is a small `'drop'` with few particles and no splash. See the module header for the rest.
+
+Two ways to get pixels, with opposite bargains:
+
+| | Owns the canvas? | For |
+|---|---|---|
+| `paintStains(ctx, scene)` | No — never clears, resizes, or leaves state behind. Whatever is underneath stays and blends. | Compositing stains onto a page you already drew |
+| `generateStainCanvas({ size, seed })` | Yes — it creates (or takes) a canvas, sizes it, and hands it back | One stain, one image: `el.style.backgroundImage = url(canvas.toDataURL())` |
+
+```bash
+node --test                      # run the suite
+python3 -m http.server 8000      # then open http://localhost:8000/demo/
+```
+
+`demo/texture.html` paints stains over patterned page content; `demo/index.html` is a grid of six with live physics knobs and a dark-field view, click any stain to re-brew it; `demo/animate.html` dries one in real time.
 
 ## The physics
 
@@ -28,27 +60,13 @@ The sim returns per-epoch `events` (depin onsets, hole geometry, ring radii) alo
 
 | Path | What |
 |---|---|
-| `src/rng.js` | mulberry32 plus gaussian/uniform samplers |
-| `src/noise.js` | 2D simplex noise and fBm |
-| `src/contour.js` | noisy closed contact line, optional splash fingers |
-| `src/physics.js` | velocity field, ring-growth ODE, hole depinning, interior settlement, crescent supply |
+| `src/coffee-stains.js` | the public API: `createStain`, `paintStains` |
 | `src/stain.js` | composition and impact-energy model, deposits to splats and washes |
-| `src/render.js` | paints a stain on a canvas |
-| `demo/index.html` | 12-stain grid, click to re-brew |
-
-## Usage
-
-```bash
-node --test                      # run the suite
-python3 -m http.server 8000      # then open http://localhost:8000/demo/
-```
-
-```js
-import { generateStainCanvas } from './src/render.js';
-const { canvas } = generateStainCanvas({ size: 560, seed: 42 });
-el.style.backgroundImage = `url(${canvas.toDataURL()})`;
-```
-
-Useful options: `type` ('drop' or 'mug'), `splashEnergy` (Weber-number stand-in; high values finger and splatter), and `phi` (concentration; low values give sparse spoked interiors, high values give broad rims).
+| `src/physics.js` | velocity field, ring-growth ODE, hole depinning, interior settlement, crescent supply |
+| `src/contour.js` | noisy closed contact line, optional splash fingers |
+| `src/noise.js` | 2D simplex noise and fBm |
+| `src/rng.js` | mulberry32 plus gaussian/uniform samplers |
+| `src/render.js` | the canvas client: paints a stain, or generates one on its own canvas |
+| `src/animate.js` | the drying animation |
 
 See `docs/research-notes.md` for the research this design came from, including why live SVG `feTurbulence` filters were rejected.

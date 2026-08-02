@@ -3,7 +3,11 @@
 
 import { buildStain, DEFAULT_RADIUS_FRACTION } from './stain.js';
 
-export function paintStain(ctx, stain, { cx = 0, cy = 0, darkField = false } = {}) {
+export function paintStain(
+  ctx,
+  stain,
+  { cx = 0, cy = 0, darkField = false, composite = 'multiply' } = {},
+) {
   const trace = (pts) => {
     pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
     ctx.closePath();
@@ -30,7 +34,10 @@ export function paintStain(ctx, stain, { cx = 0, cy = 0, darkField = false } = {
   }
   ctx.save();
   ctx.translate(cx, cy);
-  ctx.globalCompositeOperation = 'multiply';
+  // Multiply is how ink behaves on paper — darkening whatever it lands on —
+  // and it is the default for that reason. A caller compositing the stain
+  // over its own art may need a different rule, so the blend is theirs to set.
+  ctx.globalCompositeOperation = composite;
   for (const w of stain.washes) {
     ctx.beginPath();
     trace(w.points);

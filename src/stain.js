@@ -608,7 +608,7 @@ const SIZE_LAWS = {
   droplet: (r, radius) => radius * r,
 };
 
-function scaleStain({ splats, washes }, radius) {
+export function scaleStain({ splats, washes }, radius) {
   const scalePoints = (pts) => pts.map((p) => ({ x: p.x * radius, y: p.y * radius }));
   return {
     splats: splats.map((s) => {

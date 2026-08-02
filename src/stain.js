@@ -3,6 +3,10 @@
 // washes and metadata (buildStain). Plain data all the way out — nothing here
 // knows what will draw it.
 //
+// A stain is a shape, not a size: emitStain works in units of the parent
+// radius, so the same emission paints at any radius. buildStain multiplies
+// through to pixels for the radius it was asked for.
+//
 // Two archetypes:
 //   'drop' — a sessile spill: liquid covers the full footprint, so the ring
 //            encloses a translucent mottled wash.
@@ -23,6 +27,12 @@ import { makeSupplySampler, simulateBand, simulateDrop, widthFactor } from './ph
 // splats normalize their alpha against this baseline. Dark-field ignores
 // alpha on purpose: fluorescence brightness IS particle count.
 const TRACER_BASELINE = 3500;
+
+// Wash outlines are sampled at a fixed resolution. The contact line's own
+// rule — segment length roughly constant, so points scale with radius — wants
+// a pixel size to aim at, which unit-radius emission does not have. 600 is
+// that rule evaluated at a 145 px radius, the scale these stains are drawn at.
+const WASH_POINTS = 600;
 
 // generateStainCanvas draws at radius = radiusFraction * size, so anything
 // further than 0.5/radiusFraction radii from centre is clipped off the canvas
@@ -315,10 +325,15 @@ export function composeStain({
 }
 
 // Dry the composition: run the particle sims and turn their deposits into
-// splats and washes. Every draw here comes from a per-component stream, so
-// re-rolling one component leaves its neighbors alone. The seed and radius
-// come from the composition itself; the config carries only what emission
-// adds — sampling resolution and clipping.
+// splats and washes, in units of the parent radius. Every draw here comes
+// from a per-component stream, so re-rolling one component leaves its
+// neighbors alone. The seed and radius come from the composition itself;
+// the config carries only what emission adds — sampling resolution and
+// clipping.
+//
+// `radius` is not a scale for anything emitted: composeStain strikes the
+// band's radius, half-width and placement offsets in pixels, so emission
+// divides them back out to recover the fractions they were drawn as.
 export function emitStain(composition, { particles, partialChance, canvasBound }) {
   const {
     seed,
@@ -334,7 +349,7 @@ export function emitStain(composition, { particles, partialChance, canvasBound }
   const noise2D = createNoise2D(mulberry32((seed ^ 0x9e3779b9) >>> 0));
   const splats = [];
   const washes = [];
-  const splatBase = Math.max(0.8, radius * 0.016);
+  const toUnit = (px) => px / radius;
   const fingerCount = fingerAzimuths.length;
 
   // Weak-pinning arcs where the contact line lets go partway through the
@@ -375,8 +390,9 @@ export function emitStain(composition, { particles, partialChance, canvasBound }
     splats.push({
       x,
       y,
-      r: splatBase * rJitter * style.r,
-      rInk: splatBase * rJitter * (style.rInk ?? style.r),
+      sizing: 'grain',
+      r: rJitter * style.r,
+      rInk: rJitter * (style.rInk ?? style.r),
       // Azimuthal shade belongs to the contact line, so it only modulates
       // jammed deposits; interior structure paints flat.
       alpha: rng.uniform(style.aLo, style.aHi) * (deposit.pinned ? shade : 1) * alphaNorm,
@@ -414,7 +430,7 @@ export function emitStain(composition, { particles, partialChance, canvasBound }
     const shadeAt = (theta) => baseShade(theta) * (1 + 0.45 * line.spikeAt(theta));
     // The thin residue film left over the whole footprint.
     washes.push({
-      points: line.points().map((p) => ({ x: cx + p.x, y: cy + p.y })),
+      points: line.points(WASH_POINTS).map((p) => ({ x: cx + p.x, y: cy + p.y })),
       color: WASH_COLOR,
       alpha: washAlpha,
     });
@@ -473,10 +489,9 @@ export function emitStain(composition, { particles, partialChance, canvasBound }
     const shadeAt = spikes
       ? (theta) => baseShade(theta) * (1 + 0.45 * spikes.envelopeAt(theta))
       : baseShade;
-    const n = Math.floor(4 * R + 20);
     const ringPts = (fn) =>
-      Array.from({ length: n }, (_, k) => {
-        const theta = (k / n) * 2 * Math.PI;
+      Array.from({ length: WASH_POINTS }, (_, k) => {
+        const theta = (k / WASH_POINTS) * 2 * Math.PI;
         const r = fn(theta);
         return { x: cx + r * Math.cos(theta), y: cy + r * Math.sin(theta) };
       });
@@ -502,10 +517,10 @@ export function emitStain(composition, { particles, partialChance, canvasBound }
     placements.forEach((placement, k) => {
       addMugRing({
         rng: componentRng(k),
-        cx: placement.cx,
-        cy: placement.cy,
-        R: placement.R,
-        wBase: placement.wBase,
+        cx: toUnit(placement.cx),
+        cy: toUnit(placement.cy),
+        R: toUnit(placement.R),
+        wBase: toUnit(placement.wBase),
         count: Math.floor(particles * 0.55),
         phi: stainPhi,
         supply: placement.supply,
@@ -517,7 +532,7 @@ export function emitStain(composition, { particles, partialChance, canvasBound }
       rng: componentRng(0),
       cx: 0,
       cy: 0,
-      r: radius,
+      r: 1,
       count: particles,
       phi: stainPhi,
       spikes,
@@ -534,15 +549,15 @@ export function emitStain(composition, { particles, partialChance, canvasBound }
     const satRng = componentRng(8 + j);
     const maxCenter = canvasBound - 0.05 - spec.size * 1.3;
     const clamped = Math.min(spec.dist, maxCenter);
-    const dist = clamped * radius;
-    const x = dist * Math.cos(spec.theta);
-    const y = dist * Math.sin(spec.theta);
+    const x = clamped * Math.cos(spec.theta);
+    const y = clamped * Math.sin(spec.theta);
     if (fingerCount > 0) {
       for (const p of trailSpecsFor({ ...spec, dist: clamped }, satRng)) {
         splats.push({
-          x: p.dist * radius * Math.cos(p.theta),
-          y: p.dist * radius * Math.sin(p.theta),
-          r: Math.max(0.5, p.size * radius * satRng.uniform(0.5, 0.9)),
+          x: p.dist * Math.cos(p.theta),
+          y: p.dist * Math.sin(p.theta),
+          sizing: 'speck',
+          r: p.size * satRng.uniform(0.5, 0.9),
           alpha: satRng.uniform(0.05, 0.11),
           color: RING_COLORS[satRng.int(RING_COLORS.length)],
         });
@@ -551,13 +566,13 @@ export function emitStain(composition, { particles, partialChance, canvasBound }
     if (spec.size < cutoff) {
       // Too dilute to self-pin at this size: a solid blob, no ring, no sim.
       // Same pigment constants as ring splats so the populations match.
-      const px = spec.size * radius;
       const n = 2 + satRng.int(3);
       for (let k = 0; k < n; k++) {
         splats.push({
-          x: x + satRng.uniform(-0.3, 0.3) * px,
-          y: y + satRng.uniform(-0.3, 0.3) * px,
-          r: px * satRng.uniform(0.35, 0.75),
+          x: x + satRng.uniform(-0.3, 0.3) * spec.size,
+          y: y + satRng.uniform(-0.3, 0.3) * spec.size,
+          sizing: 'droplet',
+          r: spec.size * satRng.uniform(0.35, 0.75),
           alpha: satRng.uniform(0.06, 0.13),
           color: RING_COLORS[satRng.int(RING_COLORS.length)],
         });
@@ -567,14 +582,48 @@ export function emitStain(composition, { particles, partialChance, canvasBound }
         rng: satRng,
         cx: x,
         cy: y,
-        r: spec.size * radius,
+        r: spec.size,
         count: Math.max(120, Math.floor(particles * spec.size * spec.size * 4)),
         phi: stainPhi,
       });
     }
   });
 
-  return { splats, washes };
+  return { splats, washes, unit: true };
+}
+
+// Paint-time scaling: multiply a unit-radius stain through by the radius it
+// is being drawn at. Splat sizes go through a size law rather than a bare
+// multiply, because each carries a minimum in device pixels — a deposit
+// thinner than a pixel vanishes at small render sizes, which is
+// display-resolution physics, not stain physics, so the floor can only be
+// applied once the radius is known. Every law is linear in r, so a splat's
+// share of the ink is the same at any radius the floor does not bite at.
+//   grain    pigment from the sim, sized off the shared splat base
+//   speck    a ligament fragment, its own radius floored at half a pixel
+//   droplet  a satellite blob, far enough above the floor to skip it
+const SIZE_LAWS = {
+  grain: (r, radius) => Math.max(0.8, radius * 0.016) * r,
+  speck: (r, radius) => Math.max(0.5, radius * r),
+  droplet: (r, radius) => radius * r,
+};
+
+function scaleStain({ splats, washes }, radius) {
+  const scalePoints = (pts) => pts.map((p) => ({ x: p.x * radius, y: p.y * radius }));
+  return {
+    splats: splats.map((s) => {
+      const size = SIZE_LAWS[s.sizing];
+      const scaled = { x: s.x * radius, y: s.y * radius, r: size(s.r, radius) };
+      if (s.rInk !== undefined) scaled.rInk = size(s.rInk, radius);
+      return { ...scaled, alpha: s.alpha, color: s.color };
+    }),
+    washes: washes.map((w) => ({
+      points: scalePoints(w.points),
+      ...(w.holePoints ? { holePoints: scalePoints(w.holePoints) } : {}),
+      color: w.color,
+      alpha: w.alpha,
+    })),
+  };
 }
 
 export function buildStain(options = {}) {
@@ -603,7 +652,10 @@ export function buildStain(options = {}) {
     throw new RangeError(`splashEnergy must be finite and non-negative, got ${splashEnergy}`);
   }
   const composition = composeStain(options);
-  const { splats, washes } = emitStain(composition, { particles, partialChance, canvasBound });
+  const { splats, washes } = scaleStain(
+    emitStain(composition, { particles, partialChance, canvasBound }),
+    radius,
+  );
   return {
     splats,
     washes,

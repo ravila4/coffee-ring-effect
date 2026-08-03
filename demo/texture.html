@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coffee stains as a texture</title>
+<style>
+  body { margin: 0; padding: 1.2rem; font: 14px/1.6 -apple-system, "Helvetica Neue", sans-serif; color: #4a3b2a; background: #efe7d7; }
+  h1 { font-size: 1.05rem; margin: 0 0 .3rem; }
+  p.note { margin: 0 0 1rem; max-width: 52rem; color: #6b5b44; font-size: .85rem; }
+  /* Ruled paper: the point of the page is that this pattern, and the text on
+     top of it, stay visible through the stains. */
+  .sheet {
+    position: relative; width: 840px; height: 660px; box-sizing: border-box; padding: 2.2rem 2.6rem;
+    background-color: #fdf7e9;
+    background-image:
+      repeating-linear-gradient(0deg, rgba(120,90,50,.14) 0 1px, transparent 1px 28px),
+      repeating-linear-gradient(90deg, rgba(120,90,50,.08) 0 1px, transparent 1px 28px);
+    border: 1px solid #d9cbb0; border-radius: 4px; box-shadow: 0 8px 24px rgba(74,59,42,.12);
+  }
+  .sheet h2 { font-size: 1.6rem; margin: 0 0 1rem; font-weight: 600; }
+  .sheet p { max-width: 34rem; margin: 0 0 1rem; }
+  /* The canvas is transparent everywhere the coffee never reached, so
+     multiply leaves the page untouched there and darkens only under ink. */
+  canvas { position: absolute; inset: 0; width: 840px; height: 660px; mix-blend-mode: multiply; pointer-events: none; }
+</style>
+</head>
+<body>
+<h1>Coffee stains as a texture</h1>
+<p class="note">
+  One mug ring and four droplets, generated once and painted onto a transparent
+  canvas laid over the page. Nothing was composited into the artwork ahead of
+  time: the ruled paper and the text below are ordinary page content, and the
+  stains multiply over them.
+</p>
+<div class="sheet">
+  <h2>Field notes, Tuesday</h2>
+  <p>
+    The edge of a puddle sticks to the surface under it rather than shrinking
+    inward as it dries. Water leaves fastest right at that edge, so liquid
+    flows outward from the middle to replace what evaporates, carrying the
+    suspended particles with it. They jam against the edge and stay there.
+  </p>
+  <p>
+    That is the whole of the coffee-ring effect, and it is why the mark a mug
+    leaves is a ring and not a disk. Set the cup down twice and you get two
+    rings, crossing where the second landed off the first.
+  </p>
+  <canvas id="stains" width="840" height="660"></canvas>
+</div>
+<script type="module">
+import { createStain, paintStains } from '../src/coffee-stains.js';
+
+// Each stain is generated once; painting is just placement after this. The
+// same stain could go down again at another size without a new simulation.
+const mug = createStain({ type: 'mug', seed: 42, phi: 0.008, particles: 9000 });
+// A droplet is a small drop that landed gently: no splash to finger, no
+// satellites. Strong coffee (phi) keeps a 15 px drip legible; left to draw its
+// own, a weak one dries to almost nothing. Opacity does the fading — a stain
+// starved of tracers paints lighter as well as coarser.
+const droplet = (seed) => createStain({ type: 'drop', seed, phi: 0.012, particles: 1800, splashEnergy: 0 });
+
+paintStains(document.getElementById('stains').getContext('2d'), [
+  { stain: mug, x: 520, y: 320, radius: 172, opacity: 0.7, rotation: 0.4 },
+  { stain: droplet(7), x: 170, y: 305, radius: 29, opacity: 0.5 },
+  { stain: droplet(11), x: 262, y: 486, radius: 15, opacity: 0.38, rotation: 1.2 },
+  { stain: droplet(19), x: 706, y: 548, radius: 34, opacity: 0.5, rotation: 2.4 },
+  { stain: droplet(23), x: 116, y: 590, radius: 9, opacity: 0.3 },
+]);
+</script>
+</body>
+</html>

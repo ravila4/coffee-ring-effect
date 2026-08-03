@@ -55,6 +55,93 @@ export function radialHistogram(rho, alive, { bins = 24, density = false } = {})
   return h;
 }
 
+// How much of the deposit is on screen at playback position v. Playback has
+// two acts: during the drying the count comes from the snapshot (deposits
+// appear as particles jam), during the interior sweep the leftovers settle at
+// a steady rate, so the tail is revealed linearly.
+export function depositTargetAt(v, { frames, uSplit, loopDeposits, totalDeposits, warpP = 2 }) {
+  if (v < uSplit) return frames[frameIndexFor(v / uSplit, frames.length, warpP)].depositCount;
+  return Math.min(
+    totalDeposits,
+    loopDeposits + Math.ceil(((v - uSplit) / (1 - uSplit)) * (totalDeposits - loopDeposits)),
+  );
+}
+
+const TICK_FRACTIONS = [0.25, 0.5, 0.75, 0.9];
+
+// Where the scrubber's tick marks land, in pixels along a strip of `width`.
+// Ticks mark realized drying fraction, so the widening gaps between them make
+// the time warp visible. A free-recession run tears loose before t=1: ticks
+// past the realized end (tLast) are dropped rather than drawn off the strip,
+// and the remaining ones stretch to fill the drying half.
+export function scrubberTicks({ tLast, width, uSplit, warpP = 2 }) {
+  const ticks = [];
+  for (const p of TICK_FRACTIONS) {
+    if (p > tLast) continue;
+    ticks.push({ x: warpU(p / tLast, warpP) * width * uSplit, label: `${p * 100}%` });
+  }
+  ticks.push({ x: width * uSplit, label: tLast < 0.95 ? 'tears free' : 'dry' });
+  return ticks;
+}
+
+// The playback clock: position runs 0→1 over `total` ms of wall-clock while
+// playing, and holds where it is otherwise. Clock and frame scheduler are
+// injected so playback logic runs without a browser.
+export function makePlaybackController({
+  total,
+  onFrame,
+  now = () => performance.now(),
+  raf = (cb) => requestAnimationFrame(cb),
+  caf = (id) => cancelAnimationFrame(id),
+}) {
+  let v = 0;
+  let playing = false;
+  let frame = 0;
+  let lastNow = 0;
+
+  const tick = (stamp) => {
+    if (playing) {
+      v = Math.min(1, Math.max(0, v + (stamp - lastNow) / total));
+      lastNow = stamp;
+      if (v >= 1) pause();
+      onFrame();
+    }
+    frame = playing ? raf(tick) : 0;
+  };
+
+  const play = () => {
+    if (playing) return;
+    if (v >= 1) v = 0;
+    playing = true;
+    // Elapsed time is sampled fresh, so a long pause isn't charged to playback.
+    lastNow = now();
+    frame = raf(tick);
+    onFrame();
+  };
+
+  const pause = () => {
+    playing = false;
+    if (frame) caf(frame);
+    frame = 0;
+    onFrame();
+  };
+
+  return {
+    get position() {
+      return v;
+    },
+    get playing() {
+      return playing;
+    },
+    play,
+    pause,
+    seek(frac) {
+      v = Math.min(1, Math.max(0, frac));
+      onFrame();
+    },
+  };
+}
+
 const PAPER = '#fffdf7';
 const INK = '#4a3b2a';
 const MUTED = '#8a7a60';
@@ -109,41 +196,11 @@ function precompute({ seed, particles, steps, tEnd, diffusion, phi }) {
   };
 }
 
-// Everything below is presentation: canvases, the scrubber strip, plots.
-export function mountDryingAnimation(container, {
-  seed = 1,
-  phi = 0.003,
-  particles = 1800,
-  steps = 360,
-  tEnd = 0.97,
-  diffusion = 0.02,
-  duration = 10000, // wall-clock ms for the drying phase
-  sweepDuration = 2200, // ms for the post-dry-out interior sweep
-  warpP = 2,
-  mainSize = 520,
-  plotWidth = 250,
-  darkField = false, // microscope view: white deposits on black, no wash
-} = {}) {
-  let dark = darkField;
-  const sim = precompute({ seed, particles, steps, tEnd, diffusion, phi });
-  const { frames, deposits, loopDeposits, interiorMode } = sim;
-  const tail = deposits.slice(loopDeposits);
-  const depositRho = Float64Array.from(deposits, (d) => d.rho);
-  const ones = new Uint8Array(Math.max(particles, deposits.length)).fill(1);
-  const dpr = Math.min(2, (typeof devicePixelRatio !== 'undefined' && devicePixelRatio) || 1);
-
-  // Deposit splat styles are fixed at mount so scrubbing is deterministic.
-  // The ×3 on alpha is this view's own: it composites source-over with no
-  // wash underlay, so it needs about three times the ink of the static render
-  // to reach the same visual weight.
-  const styleRng = makeRng((seed ^ 0x5eed) >>> 0);
-  const splatStyles = deposits.map((d) => ({
-    r: (d.pinned ? 1 : 1.3) * (0.6 + 0.8 * styleRng.random()),
-    alpha: (d.pinned ? 0.06 + 0.07 * styleRng.random() : 0.05 + 0.05 * styleRng.random()) * 3,
-    color: RING_COLORS[styleRng.int(RING_COLORS.length)],
-  }));
-
-  // --- DOM scaffold (inline styles so the blog embed needs no stylesheet) ---
+// Static structure of the widget: the drop over its scrubber and control bar
+// on the left, three stacked plots on the right. Inline styles so the blog
+// embed needs no stylesheet. Returns the pieces the painters and handlers
+// need, plus the offscreen layer the deposit accumulates on.
+function buildScaffold(container, { mainSize, plotWidth, dpr, dark }) {
   const root = document.createElement('div');
   root.style.cssText = `display:flex;gap:14px;align-items:flex-start;color:${INK};` +
     'font:12px/1.4 -apple-system,"Helvetica Neue",sans-serif;';
@@ -204,36 +261,79 @@ export function mountDryingAnimation(container, {
 
   container.append(root);
 
-  // --- playback state ---
-  // v ∈ [0,1] spans the whole wall-clock timeline; the first uSplit of it is
-  // the (time-warped) drying, the remainder the interior sweep.
-  const total = duration + sweepDuration;
-  const uSplit = duration / total;
-  let v = 0;
-  let playing = false;
-  let raf = 0;
-  let lastNow = 0;
-  let drawnDeposits = 0;
-
-  const R = mainSize * 0.42;
-  const cx = mainSize / 2;
-  const cy = mainSize / 2;
-
+  // Deposits are permanent, so they accumulate on their own layer and get
+  // blitted under the live particles instead of being redrawn every frame.
   const depositLayer = document.createElement('canvas');
   depositLayer.width = mainSize * dpr;
   depositLayer.height = mainSize * dpr;
   const depCtx = depositLayer.getContext('2d');
   depCtx.scale(dpr, dpr);
 
-  const frameFor = (u) => frames[frameIndexFor(u, frames.length, warpP)];
-
-  const depositTargetAt = () => {
-    if (v < uSplit) return frameFor(v / uSplit).depositCount;
-    return Math.min(
-      deposits.length,
-      loopDeposits + Math.ceil(((v - uSplit) / (1 - uSplit)) * tail.length),
-    );
+  return {
+    root, mainC, mainCtx, scrubC, scrubCtx, playBtn, hud, darkBox,
+    histCtx, fracCtx, radCtx, plotH, depositLayer, depCtx,
   };
+}
+
+// Everything below is presentation: canvases, the scrubber strip, plots.
+export function mountDryingAnimation(container, {
+  seed = 1,
+  phi = 0.003,
+  particles = 1800,
+  steps = 360,
+  tEnd = 0.97,
+  diffusion = 0.02,
+  duration = 10000, // wall-clock ms for the drying phase
+  sweepDuration = 2200, // ms for the post-dry-out interior sweep
+  warpP = 2,
+  mainSize = 520,
+  plotWidth = 250,
+  darkField = false, // microscope view: white deposits on black, no wash
+} = {}) {
+  let dark = darkField;
+  const sim = precompute({ seed, particles, steps, tEnd, diffusion, phi });
+  const { frames, deposits, loopDeposits, interiorMode } = sim;
+  const tail = deposits.slice(loopDeposits);
+  const depositRho = Float64Array.from(deposits, (d) => d.rho);
+  const ones = new Uint8Array(Math.max(particles, deposits.length)).fill(1);
+  const dpr = Math.min(2, (typeof devicePixelRatio !== 'undefined' && devicePixelRatio) || 1);
+
+  // Deposit splat styles are fixed at mount so scrubbing is deterministic.
+  // The ×3 on alpha is this view's own: it composites source-over with no
+  // wash underlay, so it needs about three times the ink of the static render
+  // to reach the same visual weight.
+  const styleRng = makeRng((seed ^ 0x5eed) >>> 0);
+  const splatStyles = deposits.map((d) => ({
+    r: (d.pinned ? 1 : 1.3) * (0.6 + 0.8 * styleRng.random()),
+    alpha: (d.pinned ? 0.06 + 0.07 * styleRng.random() : 0.05 + 0.05 * styleRng.random()) * 3,
+    color: RING_COLORS[styleRng.int(RING_COLORS.length)],
+  }));
+
+  const {
+    root, mainC, mainCtx, scrubC, scrubCtx, playBtn, hud, darkBox,
+    histCtx, fracCtx, radCtx, plotH, depositLayer, depCtx,
+  } = buildScaffold(container, { mainSize, plotWidth, dpr, dark });
+
+  // --- playback state ---
+  // The position runs over the whole wall-clock timeline; the first uSplit of
+  // it is the (time-warped) drying, the remainder the interior sweep.
+  const total = duration + sweepDuration;
+  const uSplit = duration / total;
+  const playback = makePlaybackController({ total, onFrame: () => render() });
+  const depositSchedule = {
+    frames,
+    uSplit,
+    loopDeposits,
+    totalDeposits: deposits.length,
+    warpP,
+  };
+  let drawnDeposits = 0;
+
+  const R = mainSize * 0.42;
+  const cx = mainSize / 2;
+  const cy = mainSize / 2;
+
+  const frameFor = (u) => frames[frameIndexFor(u, frames.length, warpP)];
 
   const drawDepositsTo = (count) => {
     if (count < drawnDeposits) {
@@ -270,7 +370,7 @@ export function mountDryingAnimation(container, {
   const drawMain = (f, depositTarget) => {
     mainCtx.fillStyle = dark ? '#000' : PAPER;
     mainCtx.fillRect(0, 0, mainSize, mainSize);
-    const drying = v < uSplit;
+    const drying = playback.position < uSplit;
     const tFrac = Math.min(1, f.t / sim.tEnd);
 
     // Original footprint, always visible so contact-line retreat reads.
@@ -306,7 +406,7 @@ export function mountDryingAnimation(container, {
       }
       circle(mainCtx, f.base * R, lineStyle);
       if (f.innerEdge < f.base - 1e-3) circle(mainCtx, f.innerEdge * R, dashStyle, [3, 3]);
-    } else if (v < 1) {
+    } else if (playback.position < 1) {
       // Leftovers waiting for the sweep stay visible until the front takes
       // them (drawn at their settled spot — dots barely move, spokes snap).
       mainCtx.fillStyle = liveStyle;
@@ -327,7 +427,7 @@ export function mountDryingAnimation(container, {
       }
     }
 
-    if (!playing) {
+    if (!playback.playing) {
       // Click-to-play affordance.
       mainCtx.fillStyle = dark ? 'rgba(220,210,190,0.75)' : 'rgba(74,59,42,0.55)';
       mainCtx.beginPath();
@@ -353,44 +453,37 @@ export function mountDryingAnimation(container, {
     scrubCtx.fillStyle = 'rgba(185,168,136,0.7)';
     scrubCtx.fillRect(W * uSplit, 6, W * (1 - uSplit), 4);
     scrubCtx.fillStyle = ACCENT;
-    scrubCtx.fillRect(0, 6, W * v, 4);
+    scrubCtx.fillRect(0, 6, W * playback.position, 4);
     scrubCtx.font = '10px -apple-system,sans-serif';
     scrubCtx.textAlign = 'center';
-    // Ticks mark realized drying fraction: a free-recession run tears loose
-    // before t=1, so late ticks can fall past the end of the pinned loop.
     const tLast = frames[frames.length - 1].t / sim.tEnd;
-    for (const p of [0.25, 0.5, 0.75, 0.9]) {
-      if (p > tLast) continue;
-      const x = warpU(p / tLast, warpP) * W * uSplit;
+    for (const { x, label } of scrubberTicks({ tLast, width: W, uSplit, warpP })) {
       scrubCtx.fillStyle = MUTED;
       scrubCtx.fillRect(x - 0.5, 4, 1, 8);
-      scrubCtx.fillText(`${p * 100}%`, x, 24);
+      scrubCtx.fillText(label, x, 24);
     }
-    scrubCtx.fillStyle = MUTED;
-    scrubCtx.fillRect(W * uSplit - 0.5, 4, 1, 8);
-    scrubCtx.fillText(tLast < 0.95 ? 'tears free' : 'dry', W * uSplit, 24);
     scrubCtx.fillText('sweep', (W * (uSplit + 1)) / 2, 24);
     scrubCtx.fillStyle = ACCENT;
     scrubCtx.beginPath();
-    scrubCtx.arc(W * v, 8, 5, 0, 2 * Math.PI);
+    scrubCtx.arc(W * playback.position, 8, 5, 0, 2 * Math.PI);
     scrubCtx.fill();
   };
 
   const drawHud = (f) => {
-    if (v >= 1) {
+    if (playback.position >= 1) {
       const rim = deposits.filter((d) => d.pinned).length;
       hud.textContent = `dry · ${Math.round((100 * rim) / deposits.length)}% of the pigment jammed at the rim`;
-    } else if (v >= uSplit) {
+    } else if (playback.position >= uSplit) {
       hud.textContent = interiorMode === 'recession'
         ? 'dry — the receding film sweeps the leftovers into spokes and arcs'
         : 'dry — the leftover residue settles where it sits';
     } else {
-      const u = v / uSplit;
+      const u = playback.position / uSplit;
       const slow = slowMoFactor(u, warpP);
       const label = slow >= 100 ? '×100+' : `×${slow < 3 ? slow.toFixed(1) : Math.round(slow)}`;
       hud.textContent = `drying: ${Math.round((100 * f.t) / sim.tEnd)}% · playback ${label} slow-mo`;
     }
-    playBtn.textContent = playing ? 'pause' : v >= 1 ? 'replay' : 'play';
+    playBtn.textContent = playback.playing ? 'pause' : playback.position >= 1 ? 'replay' : 'play';
   };
 
   // --- side plots ---
@@ -416,7 +509,7 @@ export function mountDryingAnimation(container, {
   const drawHist = (f, depositTarget) => {
     plotFrame(histCtx);
     let suspRho;
-    if (v < uSplit) {
+    if (playback.position < uSplit) {
       suspRho = new Float64Array(f.alive);
       for (let j = 0; j < f.alive; j++) suspRho[j] = f.pos[2 * j];
     } else {
@@ -518,8 +611,9 @@ export function mountDryingAnimation(container, {
   };
 
   const render = () => {
+    const v = playback.position;
     const f = frameFor(v < uSplit ? v / uSplit : 1);
-    const depositTarget = depositTargetAt();
+    const depositTarget = depositTargetAt(v, depositSchedule);
     const tFrac = Math.min(1, f.t / sim.tEnd);
     drawMain(f, depositTarget);
     drawScrub();
@@ -529,42 +623,18 @@ export function mountDryingAnimation(container, {
     drawRadius(tFrac);
   };
 
-  const tick = (now) => {
-    if (playing) {
-      v = Math.min(1, Math.max(0, v + (now - lastNow) / total));
-      lastNow = now;
-      if (v >= 1) pause();
-      render();
-    }
-    raf = playing ? requestAnimationFrame(tick) : 0;
-  };
-
-  const play = () => {
-    if (playing) return;
-    if (v >= 1) v = 0;
-    playing = true;
-    lastNow = performance.now();
-    raf = requestAnimationFrame(tick);
-    render();
-  };
-  const pause = () => {
-    playing = false;
-    if (raf) cancelAnimationFrame(raf);
-    raf = 0;
-    render();
-  };
-  playBtn.addEventListener('click', () => (playing ? pause() : play()));
-  mainC.addEventListener('click', () => (playing ? pause() : play()));
+  const toggle = () => (playback.playing ? playback.pause() : playback.play());
+  playBtn.addEventListener('click', toggle);
+  mainC.addEventListener('click', toggle);
 
   let wasPlaying = false;
   const seekTo = (clientX) => {
     const rect = scrubC.getBoundingClientRect();
-    v = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
-    render();
+    playback.seek((clientX - rect.left) / rect.width);
   };
   scrubC.addEventListener('pointerdown', (e) => {
-    wasPlaying = playing;
-    pause();
+    wasPlaying = playback.playing;
+    playback.pause();
     scrubC.setPointerCapture(e.pointerId);
     seekTo(e.clientX);
   });
@@ -572,7 +642,7 @@ export function mountDryingAnimation(container, {
     if (scrubC.hasPointerCapture(e.pointerId)) seekTo(e.clientX);
   });
   scrubC.addEventListener('pointerup', () => {
-    if (wasPlaying && v < 1) play();
+    if (wasPlaying && playback.position < 1) playback.play();
   });
 
   // Same stain, different paint: flipping repaints the deposit layer from
@@ -592,16 +662,15 @@ export function mountDryingAnimation(container, {
 
   return {
     destroy() {
-      pause();
+      playback.pause();
       root.remove();
     },
     seek(frac) {
-      pause();
-      v = Math.min(1, Math.max(0, frac));
-      render();
+      playback.pause();
+      playback.seek(frac);
     },
     setDark,
-    play,
-    pause,
+    play: playback.play,
+    pause: playback.pause,
   };
 }

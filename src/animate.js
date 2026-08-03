@@ -3,6 +3,7 @@
 // and side plots. DOM access only happens inside mountDryingAnimation, so
 // the pure helpers stay importable under node for tests.
 
+import { RING_COLORS, WASH_COLOR } from './palette.js';
 import { makeDropStepper } from './physics.js';
 import { makeRng } from './rng.js';
 
@@ -58,12 +59,6 @@ const PAPER = '#fffdf7';
 const INK = '#4a3b2a';
 const MUTED = '#8a7a60';
 const ACCENT = '#8a6b3f';
-const RING_COLORS = [
-  [110, 62, 20],
-  [140, 88, 36],
-  [84, 45, 12],
-];
-const WASH = [172, 122, 62];
 const HIST_BINS = 28;
 
 // Run the whole sim up front, snapshotting the live suspension after every
@@ -138,6 +133,9 @@ export function mountDryingAnimation(container, {
   const dpr = Math.min(2, (typeof devicePixelRatio !== 'undefined' && devicePixelRatio) || 1);
 
   // Deposit splat styles are fixed at mount so scrubbing is deterministic.
+  // The ×3 on alpha is this view's own: it composites source-over with no
+  // wash underlay, so it needs about three times the ink of the static render
+  // to reach the same visual weight.
   const styleRng = makeRng((seed ^ 0x5eed) >>> 0);
   const splatStyles = deposits.map((d) => ({
     r: (d.pinned ? 1 : 1.3) * (0.6 + 0.8 * styleRng.random()),
@@ -284,7 +282,7 @@ export function mountDryingAnimation(container, {
       mainCtx.arc(cx, cy, f.base * R, 0, 2 * Math.PI);
       mainCtx.fillStyle = dark
         ? `rgba(120,100,80,${(0.14 * (1 - tFrac)).toFixed(3)})`
-        : `rgba(${WASH.join(',')},${(0.16 * (1 - tFrac)).toFixed(3)})`;
+        : `rgba(${WASH_COLOR.join(',')},${(0.16 * (1 - tFrac)).toFixed(3)})`;
       mainCtx.fill();
     }
 

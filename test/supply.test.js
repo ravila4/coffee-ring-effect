@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeSupplySampler } from '../src/physics.js';
-import { buildStain } from '../src/render.js';
+import { buildStain } from '../src/stain.js';
 import { makeRng } from '../src/rng.js';
 import { circDist } from './helpers.js';
 
@@ -112,7 +112,8 @@ test('multi-drip draw yields a big primary and smaller extras', () => {
 });
 
 // A lobe list that carries no coffee has no profile to sample: the CDF
-// normalizes by total mass, so these used to come back as silent NaN density.
+// normalizes by total mass, so these are rejected at construction rather than
+// left to come back as silent NaN density.
 
 test('a supply with no lobes is rejected', () => {
   assert.throws(() => makeSupplySampler([]), /lobe/);

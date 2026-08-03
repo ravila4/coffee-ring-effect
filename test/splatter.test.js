@@ -12,7 +12,7 @@ import {
   splatStyleFor,
   trailSpecsFor,
   DEFAULT_RADIUS_FRACTION,
-} from '../src/render.js';
+} from '../src/stain.js';
 
 const noise2D = createNoise2D(mulberry32(1));
 const midRng = { uniform: (a, b) => (a + b) / 2, random: () => 0.5, int: (n) => n >> 1, gaussian: () => 0 };
@@ -270,7 +270,7 @@ test('the splash bulges the band outer edge at the drip azimuth', () => {
   assert.ok(bulge > 3, `no outer-edge bulge at the drip: ${bulge.toFixed(1)}`);
 });
 
-test('set-down mugs sometimes splash now', () => {
+test('set-down mugs sometimes splash', () => {
   let splashed = 0;
   let gentle = 0;
   // A fixed-seed pin on the We draw, not a statistical claim: seeds 0..14

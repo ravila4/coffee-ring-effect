@@ -7,7 +7,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildStain } from '../src/render.js';
+import { buildStain } from '../src/stain.js';
 import { forkSeed } from '../src/rng.js';
 
 test('forkSeed derives distinct deterministic sub-seeds', () => {

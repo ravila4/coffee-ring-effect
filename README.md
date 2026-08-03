@@ -32,7 +32,8 @@ The sim returns per-epoch `events` (depin onsets, hole geometry, ring radii) alo
 | `src/noise.js` | 2D simplex noise and fBm |
 | `src/contour.js` | noisy closed contact line, optional splash fingers |
 | `src/physics.js` | velocity field, ring-growth ODE, hole depinning, interior settlement, crescent supply |
-| `src/render.js` | deposits to splats and washes to canvas, impact-energy model |
+| `src/stain.js` | composition and impact-energy model, deposits to splats and washes |
+| `src/render.js` | paints a stain on a canvas |
 | `demo/index.html` | 12-stain grid, click to re-brew |
 
 ## Usage

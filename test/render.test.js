@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildStain, generateStainCanvas, DEFAULT_RADIUS_FRACTION } from '../src/render.js';
+import { generateStainCanvas } from '../src/render.js';
+import { buildStain, DEFAULT_RADIUS_FRACTION } from '../src/stain.js';
 
 // A 2-D context that swallows every drawing call: paintStain only draws, it
 // never reads back, so recording nothing is enough to run a full render.

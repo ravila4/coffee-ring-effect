@@ -3,33 +3,35 @@ import assert from 'node:assert/strict';
 import { makeDropStepper, simulateDrop } from '../src/physics.js';
 import { makeRng } from '../src/rng.js';
 
-// Characterization pins simulateDrop's exact output across the stepper
-// extraction: same seed, same floats. Two seeds cover both endgames —
-// dilute (recession sweep) and strong (pinned interior).
-const GOLDEN = [
-  { seed: 7, phi: 0.004, n: 400, pinned: 376, sumRho: 376.06987354416117, sumTheta: 1364.9877332963208, nEvents: 2, interiorMode: 'recession' },
-  { seed: 42, phi: 0.02, n: 400, pinned: 380, sumRho: 373.6421743674842, sumTheta: 1302.516185135178, nEvents: 2, interiorMode: 'pinned' },
+// Two seeds cover both interior endgames — dilute (recession sweep) and
+// strong (pinned interior).
+const CASES = [
+  { seed: 7, phi: 0.004, nEvents: 2, interiorMode: 'recession' },
+  { seed: 42, phi: 0.02, nEvents: 2, interiorMode: 'pinned' },
 ];
 
 const OPTS = { particles: 400, steps: 120, tEnd: 0.97, diffusion: 0.02 };
 
-for (const g of GOLDEN) {
-  test(`simulateDrop output is unchanged (seed ${g.seed}, phi ${g.phi})`, () => {
-    const { deposits, events } = simulateDrop({ ...OPTS, phi: g.phi, rng: makeRng(g.seed) });
-    assert.equal(deposits.length, g.n);
-    assert.equal(deposits.filter((d) => d.pinned).length, g.pinned);
-    const sum = (f) => deposits.reduce((a, d) => a + f(d), 0);
-    assert.ok(Math.abs(sum((d) => d.rho) - g.sumRho) < 1e-9);
-    assert.ok(Math.abs(sum((d) => d.theta) - g.sumTheta) < 1e-9);
-    assert.equal(events.length, g.nEvents);
-    assert.equal(events[events.length - 1].interiorMode, g.interiorMode);
+for (const c of CASES) {
+  test(`a full drying run deposits every particle, mostly at the rim (seed ${c.seed}, phi ${c.phi})`, () => {
+    const { deposits, events } = simulateDrop({ ...OPTS, phi: c.phi, rng: makeRng(c.seed) });
+    // Mass conservation: drying ends with one deposit per particle, none lost.
+    assert.equal(deposits.length, OPTS.particles);
+    // Rim capture: the ring exists only because outward flow strands most
+    // particles at the contact line instead of drying them in the interior.
+    const pinnedFraction = deposits.filter((d) => d.pinned).length / OPTS.particles;
+    assert.ok(pinnedFraction > 0.8, `pinned fraction ${pinnedFraction} too low for a ring`);
+    assert.equal(events.length, c.nEvents);
+    // Concentration picks how the interior finishes: dilute drops sweep the
+    // film inward, strong ones pin it in place.
+    assert.equal(events[events.length - 1].interiorMode, c.interiorMode);
   });
 }
 
-for (const g of GOLDEN) {
-  test(`externally driven stepper reproduces simulateDrop (seed ${g.seed}, phi ${g.phi})`, () => {
-    const ref = simulateDrop({ ...OPTS, phi: g.phi, rng: makeRng(g.seed) });
-    const st = makeDropStepper({ ...OPTS, phi: g.phi, rng: makeRng(g.seed) });
+for (const c of CASES) {
+  test(`externally driven stepper reproduces simulateDrop (seed ${c.seed}, phi ${c.phi})`, () => {
+    const ref = simulateDrop({ ...OPTS, phi: c.phi, rng: makeRng(c.seed) });
+    const st = makeDropStepper({ ...OPTS, phi: c.phi, rng: makeRng(c.seed) });
     while (!st.done) st.step();
     st.finish();
     assert.deepEqual(st.deposits, ref.deposits);

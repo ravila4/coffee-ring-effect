@@ -93,7 +93,7 @@ test('arch angular width shrinks with concentration and stays floored', () => {
   assert.ok(holeAngularWidth(0.05) > 0, 'width must stay positive past the law zero');
 });
 
-// --- simulateDrop: the reworked API ---
+// --- simulateDrop: one call, run to dry-out ---
 
 test('every particle ends up deposited (mass conservation)', () => {
   const { deposits } = simulateDrop({ particles: 500, phi: 0.01, rng: makeRng(101) });
@@ -436,8 +436,8 @@ test('gap edges taper: deposit density falls gradually across a pinning ramp', (
   );
   // Mid-ramp stays fairly high (~0.8): displaced gap mass sloshes onto the
   // still-holding arcs and inflates the strong half of the transition. The
-  // taper lives in the weak half; the coin-flip gate put ~1.0 here and rose
-  // toward the gap.
+  // taper lives in the weak half; a binary release gate would sit at ~1.0
+  // here and rise toward the gap, which the upper bound excludes.
   const mid = rampBins[2] / strongPerBin;
   assert.ok(mid > 0.05 && mid < 0.92, `mid-ramp density ${mid.toFixed(2)} of full: not a taper`);
 });
@@ -579,7 +579,7 @@ test('arc rest radii are local fragments, not a disk-wide ladder', () => {
   const arcs = deposits.filter((d) => d.sink === 'arc');
   assert.ok(arcs.length > 100, `too few arc deposits to judge: ${arcs.length}`);
   const centers = new Set(arcs.map((d) => Math.round(d.rho * 100)));
-  // The old ladder collapsed the disk onto ~10 shared levels; local
+  // A disk-wide ladder would collapse the disk onto ~10 shared levels; local
   // fragments put rest radii nearly everywhere.
   assert.ok(centers.size > 35, `${centers.size} levels — still a global ladder`);
 });

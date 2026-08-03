@@ -53,7 +53,9 @@ export function makeRingGrowth({ phi }) {
         ((2 * phi) / PACKING) *
         (Math.pow(1 - Math.pow(1 - tau, 0.75), 1 / 3) / Math.pow(1 - tau, 0.25));
       const dxdtau = S / y;
-      x = Math.min(x + dxdtau * dtau, 3.999); // interface radius stays positive
+      // x = 4w/R, so holding x below 4 keeps the ring width under the drop
+      // radius and the interface radius R − w positive.
+      x = Math.min(x + dxdtau * dtau, 3.999);
       y += (1 - tau - y) * dxdtau * dtau;
       tau += dtau;
       if (1 - tau - y <= 0 || tau >= 1) done = true;
@@ -87,6 +89,14 @@ const TWO_PI = 2 * Math.PI;
 
 const wrap = (theta) => ((theta % TWO_PI) + TWO_PI) % TWO_PI;
 
+// Shortest separation between two azimuths, either way round the circle.
+// Both operands are wrapped: callers hold angles that accumulate drift over a
+// run and can sit well outside [0, 2π).
+const circDist = (a, b) => {
+  const d = Math.abs(wrap(a) - wrap(b));
+  return d > Math.PI ? TWO_PI - d : d;
+};
+
 // Arch arc length over drop radius, Fig. 13's linear law, floored where the
 // law crosses zero (φ ≈ 0.029, inside the render range). The naive jamming
 // argument gives 1/φ, which the paper's data reject.
@@ -107,6 +117,8 @@ export function buildKappaBins(base, holes, t, nBins = NBINS) {
     for (let db = -halfBins; db <= halfBins; db++) {
       const b = (((centerBin + db) % nBins) + nBins) % nBins;
       const thetaB = ((b + 0.5) / nBins) * TWO_PI;
+      // Both operands are already inside [0, 2π), and re-wrapping can round
+      // the low bit, so this fold stays inline rather than using circDist.
       let off = Math.abs(thetaB - center);
       if (off > Math.PI) off = TWO_PI - off;
       if (off >= h.halfWidth) continue;
@@ -208,7 +220,7 @@ export function chooseInteriorSink(load, rng) {
 // is precomputed in radial slabs; spoke emission reads the live cusp set at
 // the particle's pickup radius.
 const FRONT_STEP = 0.02; // radial slab per cusp-evolution step
-export function traceCuspFront({ rho0, spacing, wander, rng, aspect = null }) {
+function traceCuspFront({ rho0, spacing, wander, rng, aspect = null }) {
   // Spacing is a length in stepper units. On a disk the front's
   // circumference in those units shrinks with ρ, forcing merges; on a band
   // the front recedes toward the midline circle, whose circumference is the
@@ -242,8 +254,7 @@ export function traceCuspFront({ rho0, spacing, wander, rng, aspect = null }) {
       let bestGap = Infinity;
       for (let k = 0; k < thetas.length; k++) {
         const next = thetas[(k + 1) % thetas.length];
-        let gap = Math.abs(wrap(next) - wrap(thetas[k]));
-        if (gap > Math.PI) gap = TWO_PI - gap;
+        const gap = circDist(next, thetas[k]);
         if (gap < bestGap) {
           bestGap = gap;
           best = k;
@@ -290,7 +301,7 @@ export function settleInterior({
   // Stick-slip rest arcs are local: a receding arc catches over a finite
   // angular window at a radius its neighbours don't share — Figs. 9/18 show
   // broken arcs and webs, hardly any closed inner ring. A disk-wide rest
-  // ladder here rendered as tree growth rings. Fragments are created lazily
+  // ladder renders as tree growth rings. Fragments are created lazily
   // by the sweep and reused by later particles landing within reach, so
   // arc coherence is per-sector, not per-circle.
   const arcCapture = 0.02 + 0.015 * rng.random();
@@ -299,9 +310,7 @@ export function settleInterior({
     let best = null;
     let bestD = Infinity;
     for (const f of arcFragments) {
-      let off = Math.abs(wrap(p.theta) - wrap(f.theta));
-      if (off > Math.PI) off = TWO_PI - off;
-      if (off > f.halfWidth) continue;
+      if (circDist(p.theta, f.theta) > f.halfWidth) continue;
       const d = Math.abs(p.rho - f.rho);
       if (d < arcCapture && d < bestD) {
         bestD = d;
@@ -309,9 +318,10 @@ export function settleInterior({
       }
     }
     if (!best) {
-      // Always seed a fragment: a creation coin flip made the realized
-      // arc/dot split a function of particle count (more particles → more
-      // joins → fewer silent dots), breaking "tracer count is resolution".
+      // Always seed a fragment: gating creation on a coin flip would make
+      // the realized arc/dot split a function of particle count (more
+      // particles → more joins → fewer silent dots), breaking "tracer count
+      // is resolution".
       // An isolated single-particle fragment reads as a dot anyway.
       // Fragment reach is a length in cross-section units, so on a band the
       // metric shrinks it to the same physical scale as the drop's arcs.
@@ -343,8 +353,7 @@ export function settleInterior({
       let best = thetas[0];
       let bestOff = Infinity;
       for (const c of thetas) {
-        let off = Math.abs(wrap(p.theta) - wrap(c));
-        if (off > Math.PI) off = TWO_PI - off;
+        const off = circDist(p.theta, c);
         if (off < bestOff) {
           bestOff = off;
           best = c;
@@ -427,8 +436,8 @@ export function makeDropStepper({
   // a radian costs R_mid — and the azimuthal radius stays R_mid as the line
   // recedes toward the midline — so the exchange rate is the constant aspect
   // w/R_mid. Every law stays in stepper length units; only the conversion to
-  // radians branches.
-  const angPerLen = (r) => bandAspect ?? 1 / r;
+  // radians branches on bandAspect.
+  //
   // NBINS oversamples disk holes (0.02–0.07 rad), but band holes are ~aspect
   // times narrower in angle; without more bins a hole spans no bin center,
   // carves nothing, and severing can never trigger.
@@ -456,10 +465,9 @@ export function makeDropStepper({
   const phiEffAt = (tStart) =>
     Math.min(PACKING, (phi * (aliveCount / particles)) / (1 - tStart));
 
-  const newEpoch = (base, tStart, thetaEpoch, parentAnchors = null) => ({
+  const newEpoch = (base, tStart, parentAnchors = null) => ({
     base,
     tStart,
-    thetaEpoch,
     phiEff: phiEffAt(tStart),
     growth: makeRingGrowth({ phi: phiEffAt(tStart) }),
     // The first epoch is the outer rim — always a complete circle. Re-pinned
@@ -475,7 +483,7 @@ export function makeDropStepper({
     nucleationGap: Infinity,
   });
 
-  let epoch = newEpoch(1, 0, 1);
+  let epoch = newEpoch(1, 0);
   let freeRecession = false;
 
   const holeAzimuth = () => {
@@ -497,6 +505,27 @@ export function makeDropStepper({
     return ((bin + rng.random()) / nBins) * TWO_PI;
   };
 
+  // Hole geometry, identical for a first-generation hole on the epoch base and
+  // for a subarch on its parent's receded floor; only the local radius differs.
+  // The Fig. 13 law gives arc length in stepper length units and the metric
+  // converts to radians last (band: constant aspect, no local radius). A
+  // subarch is capped to sit inside its parent's window.
+  const holeHalfWidth = (phiEff, r, cap = null) => {
+    const half = bandAspect
+      ? ((holeAngularWidth(phiEff) * bandAspect) / 2) * rng.uniform(0.7, 1.3)
+      : ((holeAngularWidth(phiEff) / r) / 2) * rng.uniform(0.7, 1.3);
+    return cap === null ? half : Math.min(half, cap);
+  };
+  // Depth ≈ length·1.3: Fig. 9's cells measure round-to-tall (equivalent
+  // diameter ≈ the Fig. 13 arc length), not the shallow scallops a
+  // semicircular cap would leave. Width stays the calibrated law. Kept
+  // separate from the width draw because a subarch's offset within its parent
+  // is drawn between the two, and merging them would reorder the stream.
+  const holeDepth = (halfWidth, r) =>
+    bandAspect
+      ? 1.3 * (halfWidth / bandAspect) * rng.uniform(0.75, 1.25)
+      : 1.3 * halfWidth * r * rng.uniform(0.75, 1.25);
+
   const nucleate = (t, forced) => {
     if (forced) {
       epoch.holes.push({
@@ -508,18 +537,8 @@ export function makeDropStepper({
         generation: 0,
       });
     } else {
-      // The Fig. 13 law gives arc length in stepper length units; the metric
-      // converts to radians last (band: constant aspect, no epoch.base).
-      const arcOverR = holeAngularWidth(epoch.phiEff);
-      const halfWidth = bandAspect
-        ? ((arcOverR * bandAspect) / 2) * rng.uniform(0.7, 1.3)
-        : ((arcOverR / epoch.base) / 2) * rng.uniform(0.7, 1.3);
-      // Depth ≈ length·1.3: Fig. 9's cells measure round-to-tall (equivalent
-      // diameter ≈ the Fig. 13 arc length), not the shallow scallops a
-      // semicircular cap would leave. Width stays the calibrated law.
-      const arrestDepth = bandAspect
-        ? 1.3 * (halfWidth / bandAspect) * rng.uniform(0.75, 1.25)
-        : 1.3 * halfWidth * epoch.base * rng.uniform(0.75, 1.25);
+      const halfWidth = holeHalfWidth(epoch.phiEff, epoch.base);
+      const arrestDepth = holeDepth(halfWidth, epoch.base);
       epoch.holes.push({
         theta: holeAzimuth(),
         halfWidth,
@@ -554,18 +573,11 @@ export function makeDropStepper({
     if (localR < 0.15) return;
     const count = 1 + rng.int(2);
     for (let k = 0; k < count; k++) {
-      const halfWidth = Math.min(
-        bandAspect
-          ? ((holeAngularWidth(phiEffAt(t)) * bandAspect) / 2) * rng.uniform(0.7, 1.3)
-          : (holeAngularWidth(phiEffAt(t)) / localR / 2) * rng.uniform(0.7, 1.3),
-        parent.halfWidth * 0.95,
-      );
+      const halfWidth = holeHalfWidth(phiEffAt(t), localR, parent.halfWidth * 0.95);
       const off = rng.uniform(-1, 1) * (parent.halfWidth - halfWidth);
       // Parent floor under the child's centre (the cos² edge profile).
       const edge = Math.cos((Math.PI / 2) * (Math.abs(off) / parent.halfWidth));
-      const ownDepth = bandAspect
-        ? 1.3 * (halfWidth / bandAspect) * rng.uniform(0.75, 1.25)
-        : 1.3 * halfWidth * localR * rng.uniform(0.75, 1.25);
+      const ownDepth = holeDepth(halfWidth, localR);
       epoch.holes.push({
         theta: parent.theta + off,
         halfWidth,
@@ -587,7 +599,6 @@ export function makeDropStepper({
       anchorRelief: epoch.anchorRelief,
       wAtDepin: epoch.wAtDepin,
       wAtEnd: epoch.growth.w,
-      thetaEpoch: epoch.thetaEpoch,
       holes: epoch.holes.map((h) => ({
         theta: h.theta,
         halfWidth: h.halfWidth,
@@ -686,8 +697,7 @@ export function makeDropStepper({
           freeRecession = true;
           return;
         }
-        const thetaEpoch = Math.min(1, (1 - t) / Math.pow(rNext, 3));
-        epoch = newEpoch(rNext, t, thetaEpoch, epoch.anchors);
+        epoch = newEpoch(rNext, t, epoch.anchors);
         s++;
         return; // rebuild bins next step under the new epoch
       }
@@ -695,7 +705,7 @@ export function makeDropStepper({
 
     // Sector relief: weak-anchor sectors re-pinned deeper, strong sectors
     // caught slightly outside the mean. Centered on 1/2 so rNext stays the
-    // azimuthal MEAN catching radius — one-sided relief (1 − s) shifted
+    // azimuthal MEAN catching radius — one-sided relief (1 − s) would shift
     // every re-pinned ring inward by half the amplitude, silently re-tuning
     // the calibrated retreat draw. Applied after the sever test, which
     // measures hole coverage against the unrelieved base.
@@ -715,7 +725,7 @@ export function makeDropStepper({
       const interface_ = kb * (1 - w);
       // The D/rho term is the Itô drift of 2-D Brownian motion's radial
       // coordinate; without it the walk is 1-D-in-rho and piles a 1/r
-      // density spike at the centre (the old render hid it with centerFade).
+      // density spike at the centre — a bullseye no shading can hide.
       // A band's cross-section IS 1-D in u — no Jacobian drift — and its
       // midline is a circle, not a point: crossing reflects without the
       // antipodal θ flip a disk center demands.
@@ -737,7 +747,7 @@ export function makeDropStepper({
         // depinning pull (growing as the drop thins) exceeds its strength,
         // so strength reads as a hold time and weak arcs keep only the thin
         // early-time ring — gap edges taper instead of stepping. Strength
-        // maps to hold time linearly: steeper maps (strength², A/B-tested)
+        // maps to hold time linearly: steeper maps (strength², say)
         // release the moderate arcs that carry most of the rim and bleach
         // the ring wholesale.
         // Anchor strength is the fraction of the epoch a fence sector holds
@@ -889,6 +899,8 @@ export function makeSupplySampler(lobes = [{}]) {
   const massAt = (theta) => {
     let m = 0;
     for (const lobe of parsed) {
+      // The origin is wrapped once at parse time, and re-wrapping it can round
+      // the low bit, so this fold stays inline rather than using circDist.
       let s = Math.abs(wrap(theta) - lobe.origin);
       if (s > Math.PI) s = TWO_PI - s;
       if (s >= lobe.L) continue;
@@ -948,7 +960,7 @@ export function widthFactor(relDensity) {
 // therefore inward for the outer half and outward for the inner half; the
 // annulus contracting in two directions is the mirror, not new physics.
 // The halves share the rng stream but not particles: each dries on its own
-// solute share (midline crossings were rare and inert in the old 1-D toy).
+// solute share (midline crossings are rare and inert).
 // All the φ physics — τ_d depinning, epochs, anchor fields, holes and
 // arches, interior sinks — runs per edge unchanged; `aspect` = w/R_mid
 // tells the stepper what a radian costs. The center of the cup's footprint

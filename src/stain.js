@@ -650,17 +650,21 @@ const INK_LAWS = {
   droplet: (alpha) => alpha,
 };
 
-// grain is a fleck size in device pixels, where every other length crossing
-// this module is a fraction of the stain's own radius. That break is
-// deliberate: the case it exists for — flecks that hold one size while the
-// stains carrying them change size, the way marks on a real desk do — has no
+// grain is a fleck size in canvas user-space units — the px the ctx draws in,
+// CSS px on a DPR-normalized context — where every other length crossing this
+// module is a fraction of the stain's own radius. That break is deliberate:
+// the case it exists for — flecks that hold one size while the stains
+// carrying them change size, the way marks on a real desk do — has no
 // expression as a fraction of a radius that is itself the thing varying.
 export function scaleStain({ splats, washes }, radius, { grain } = {}) {
-  // ctx.arc silently returns on non-finite input, so a bad radius would not
-  // crash — it would paint nothing, invisibly. Every path to pixels funnels
-  // through here, which makes this the one door worth locking.
+  // ctx.arc silently returns on non-finite input, so a bad radius or grain
+  // would not crash — it would paint nothing, invisibly. Every path to pixels
+  // funnels through here, which makes this the one door worth locking.
   if (!(Number.isFinite(radius) && radius > 0)) {
     throw new RangeError(`radius must be finite and positive, got ${radius}`);
+  }
+  if (grain != null && !(Number.isFinite(grain) && grain > 0)) {
+    throw new RangeError(`grain must be finite and positive, got ${grain}`);
   }
   const scalePoints = (pts) => pts.map((p) => ({ x: p.x * radius, y: p.y * radius }));
   const grainDefault = Math.max(0.8, radius * 0.016);

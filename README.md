@@ -20,7 +20,7 @@ paintStains(ctx, [
 
 `createStain` runs the simulation and returns plain serializable data in units of the stain's own radius — cache it, ship it as JSON, paint it at any size. `paintStains` places it: array order, one save/restore per placement, `opacity` multiplying whatever alpha the context already carries, multiply blend unless you pass `{ composite }`, and `grain` per call or per placement.
 
-Knobs: `type` ('drop' or 'mug'), `phi` (concentration — low gives sparse spoked interiors, high gives broad rims), `splashEnergy` (Weber-number stand-in; high values finger and splatter), `particles` (resolution, not ink), and at paint time `grain` (fleck size in px; ink-conserving, so it retextures without reweighting). A droplet is not a third type: it is a small `'drop'` with few particles and no splash. See the module header for the rest.
+Knobs: `type` ('drop' or 'mug'), `phi` (concentration — low gives sparse spoked interiors, high gives broad rims), `splashEnergy` (Weber-number stand-in; high values finger and splatter), `particles` (resolution, not ink), and at paint time `grain` (fleck size in canvas units — CSS px on the usual DPR-scaled context; ink-conserving until the compensation saturates, so grain much finer than the default paints lighter). A droplet is not a third type: it is a small `'drop'` with few particles and no splash. See the module header for the rest.
 
 Two ways to get pixels, with opposite bargains:
 

@@ -31,14 +31,18 @@
 //              tracers even though its footprint is small.
 //   phi        pigment — how strong the coffee is. This is the knob for a
 //              darker, broader, or sparser stain.
-//   grain      fleck size in device pixels — how coarsely the pigment lands.
-//              The one knob here that belongs to painting rather than to the
+//   grain      fleck size in canvas units — how coarsely the pigment lands.
+//              The unit is whatever the ctx draws in (CSS px on the usual
+//              DPR-scaled context: do not multiply by devicePixelRatio). The
+//              one knob here that belongs to painting rather than to the
 //              stain: paintStains takes it, createStain never sees it. Left
 //              alone it scales with the stain, so painting one at two sizes
 //              is a pure zoom; pin it and the flecks hold their size while
-//              the footprint changes, the way marks on a real desk do. Ink
-//              survives either setting — coarser flecks paint proportionally
-//              fainter — so it is a texture knob, not a weight knob.
+//              the footprint changes, the way marks on a real desk do.
+//              Coarser flecks paint proportionally fainter, so the ink
+//              survives — until the compensation saturates: grain much finer
+//              than the default has no alpha headroom above 1 to spend, and
+//              paints lighter. A texture knob, not a weight knob.
 // particles and grain are the pair worth keeping straight: particles is how
 // finely the drying was sampled, grain is how coarsely the result gets
 // painted. More particles buys structure; finer grain only draws the

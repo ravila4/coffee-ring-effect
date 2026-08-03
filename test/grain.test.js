@@ -187,3 +187,19 @@ test('a placement picks its own grain over the one the call set', () => {
     relClose(inherited[i], 6 * (u.rInk ?? u.r), 1e-12, `splat ${i} under the call's grain`);
   });
 });
+
+// grain slips past ?? as NaN and past Math.max as anything: without a door,
+// grain: NaN sizes every splat NaN and ctx.arc silently draws nothing.
+test('a provided grain must be finite and positive', () => {
+  const stain = createStain(dropletSpec);
+  for (const bad of [NaN, Infinity, 0, -1.3]) {
+    assert.throws(
+      () => scaleStain(stain, 100, { grain: bad }),
+      /grain/,
+      `grain ${bad} was accepted`,
+    );
+  }
+  // null and undefined both mean "use the default law".
+  assert.ok(scaleStain(stain, 100, { grain: null }).splats.length > 0);
+  assert.ok(scaleStain(stain, 100, {}).splats.length > 0);
+});

@@ -783,6 +783,10 @@ export function makeDropStepper({
   // out now", not a pause.
   const finish = () => {
     if (finished) return;
+    // "The water ran out now": an early call settles its leftovers at the
+    // current clock. Natural completion and free recession are real dry-outs
+    // and keep tEnd — the animation timeline is built on those dates.
+    const tStop = isDone() ? tEnd : s * dt;
     finished = true;
     if (!freeRecession) recordEpoch(null);
 
@@ -803,7 +807,7 @@ export function makeDropStepper({
         ...settleInterior({
           items: leftovers,
           total: particles,
-          tEnd,
+          tEnd: tStop,
           rng,
           forceSink: interiorSink,
           cuspSpacing: 0.05 + 0.02 * rng.random(),
@@ -812,7 +816,7 @@ export function makeDropStepper({
       );
     } else {
       for (const p of leftovers) {
-        deposits.push({ rho: p.rho, theta: p.theta, t: tEnd, pinned: false, sink: 'residue' });
+        deposits.push({ rho: p.rho, theta: p.theta, t: tStop, pinned: false, sink: 'residue' });
       }
     }
   };
@@ -865,9 +869,18 @@ export function makeSupplySampler(lobes = [{}]) {
     }),
   );
   // A lobe is a reach and a volume: both are lengths, both strictly positive.
+  // Origin and falloff get the same door — a NaN in either poisons the CDF
+  // into all-NaN, which the zero-mass guard below cannot see (NaN <= 0 is
+  // false), and the sampler would hand back NaN density.
   for (const lobe of parsed) {
+    if (!Number.isFinite(lobe.origin)) {
+      throw new RangeError('lobe originTheta must be finite');
+    }
     if (!Number.isFinite(lobe.L) || lobe.L <= 0) {
       throw new RangeError(`lobe arcHalfLength must be finite and positive, got ${lobe.L}`);
+    }
+    if (!Number.isFinite(lobe.falloff) || lobe.falloff <= 0) {
+      throw new RangeError(`lobe falloff must be finite and positive, got ${lobe.falloff}`);
     }
     if (!Number.isFinite(lobe.weight) || lobe.weight <= 0) {
       throw new RangeError(`lobe weight must be finite and positive, got ${lobe.weight}`);

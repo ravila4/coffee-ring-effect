@@ -151,6 +151,15 @@ export function buildStain({
   if (mugSupply !== null && (!Array.isArray(mugSupply) || mugSupply.length === 0)) {
     throw new TypeError('mugSupply must be a non-empty array of lobes');
   }
+  // Both are continuous draws when null and NaN geometry three modules later
+  // if garbage gets through. Zero splash is a legal gentle set-down; zero
+  // pigment is no stain at all.
+  if (phi !== null && !(Number.isFinite(phi) && phi > 0)) {
+    throw new RangeError(`phi must be finite and positive, got ${phi}`);
+  }
+  if (splashEnergy !== null && !(Number.isFinite(splashEnergy) && splashEnergy >= 0)) {
+    throw new RangeError(`splashEnergy must be finite and non-negative, got ${splashEnergy}`);
+  }
   // Independent random streams, forked from the seed. The particle sims eat
   // a φ-dependent number of draws and a hard splash grows more fingers, so a
   // single shared stream would let one knob shift the draws behind every

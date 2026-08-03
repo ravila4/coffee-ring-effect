@@ -34,6 +34,24 @@ test('an overridden mug supply must be a non-empty lobe list', () => {
   }
 });
 
+// Both are continuous draws when null, and both surface as NaN geometry three
+// modules later if a NaN slips in — reject at the door. Zero splash is a
+// legal gentle set-down; zero pigment is no stain at all.
+test('an explicit phi or splashEnergy must be finite and in range', () => {
+  const base = { seed: 1, radius: 100, particles: 200 };
+  for (const bad of [0, -0.01, NaN, Infinity]) {
+    assert.throws(() => buildStain({ ...base, phi: bad }), /phi/, `phi ${bad} was accepted`);
+  }
+  for (const bad of [-1, NaN, Infinity]) {
+    assert.throws(
+      () => buildStain({ ...base, splashEnergy: bad }),
+      /splashEnergy/,
+      `splashEnergy ${bad} was accepted`,
+    );
+  }
+  assert.ok(buildStain({ ...base, splashEnergy: 0 }).splats.length > 0);
+});
+
 test('a valid mug supply override still builds', () => {
   const stain = buildStain({
     seed: 1,

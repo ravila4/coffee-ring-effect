@@ -32,6 +32,28 @@ test('step() after an early finish() deposits nothing further', () => {
   assert.deepEqual(st.deposits, settled, 'a settled deposit was advected or duplicated');
 });
 
+// "The water ran out now": an early finish() settles its leftovers at the
+// interrupt, not at the drying end it never reached. A deposit dated after
+// the clock stopped is a particle from the future.
+test('an early finish() dates its settlements at the interrupt', () => {
+  const st = makeDropStepper({ particles: 150, steps: 200, phi: 0.02, rng: makeRng(5) });
+  st.step();
+  st.finish();
+  for (const d of st.deposits) {
+    assert.ok(d.t <= st.t, `deposit dated ${d.t}, but the water ran out at ${st.t}`);
+  }
+});
+
+// Free recession is a real dry-out, not an interrupt: the interior settles at
+// the drying end, and the animation timeline built on those dates must not
+// shift.
+test('free recession settlements keep the dry-out date', () => {
+  const st = makeDropStepper({ particles: 400, steps: 400, phi: 0.0008, rng: makeRng(7) });
+  while (!st.done) st.step();
+  st.finish();
+  assert.equal(Math.max(...st.deposits.map((d) => d.t)), 0.98);
+});
+
 // Dilute drops end by free recession before the step budget runs out; that
 // path flips done on its own and must keep doing so.
 test('free recession still ends the run without finish()', () => {

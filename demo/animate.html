@@ -78,7 +78,7 @@ document.getElementById('phi').addEventListener('change', brew);
 if (q.has('phi')) document.getElementById('phi').value = q.get('phi');
 brew();
 if (q.has('at')) anim.seek(Number(q.get('at')));
-if (q.has('play')) anim.play();
+if (queryFlag(location.search, 'play')) anim.play();
 </script>
 </body>
 </html>

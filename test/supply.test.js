@@ -133,6 +133,25 @@ test('lobe reach and volume must be finite and positive', () => {
   }
 });
 
+test('lobe origin and falloff must be finite', () => {
+  // A NaN in either poisons the CDF into all-NaN, which the zero-mass guard
+  // cannot see: NaN <= 0 is false, so the sampler would hand back NaN density.
+  for (const bad of [NaN, Infinity, -Infinity]) {
+    assert.throws(
+      () => makeSupplySampler([{ originTheta: bad, arcHalfLength: 1, falloff: 1 }]),
+      /originTheta/,
+      `originTheta ${bad} was accepted`,
+    );
+  }
+  for (const bad of [0, -1, NaN, Infinity]) {
+    assert.throws(
+      () => makeSupplySampler([{ originTheta: 0, arcHalfLength: 1, falloff: bad }]),
+      /falloff/,
+      `falloff ${bad} was accepted`,
+    );
+  }
+});
+
 test('a supply too narrow to carry any mass is rejected', () => {
   // Positive but far below the CDF grid spacing: every bin integrates to zero.
   assert.throws(() => makeSupplySampler([{ originTheta: 0, arcHalfLength: 1e-6 }]), /mass/);

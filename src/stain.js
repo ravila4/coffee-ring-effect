@@ -296,6 +296,12 @@ export function composeStain({
   });
 
   return {
+    // The seed and radius ride along: every number above was drawn from
+    // streams forked off this seed at this radius, so emission must not be
+    // able to disagree — a mismatched pair would mix geometry from one
+    // configuration with random streams from another.
+    seed,
+    radius,
     type: stainType,
     phi: stainPhi,
     supply,
@@ -310,12 +316,13 @@ export function composeStain({
 
 // Dry the composition: run the particle sims and turn their deposits into
 // splats and washes. Every draw here comes from a per-component stream, so
-// re-rolling one component leaves its neighbors alone.
-export function emitStain(
-  composition,
-  { seed, radius, particles, partialChance, canvasBound },
-) {
+// re-rolling one component leaves its neighbors alone. The seed and radius
+// come from the composition itself; the config carries only what emission
+// adds — sampling resolution and clipping.
+export function emitStain(composition, { particles, partialChance, canvasBound }) {
   const {
+    seed,
+    radius,
     type: stainType,
     phi: stainPhi,
     fingerAzimuths,
@@ -596,13 +603,7 @@ export function buildStain(options = {}) {
     throw new RangeError(`splashEnergy must be finite and non-negative, got ${splashEnergy}`);
   }
   const composition = composeStain(options);
-  const { splats, washes } = emitStain(composition, {
-    seed,
-    radius,
-    particles,
-    partialChance,
-    canvasBound,
-  });
+  const { splats, washes } = emitStain(composition, { particles, partialChance, canvasBound });
   return {
     splats,
     washes,

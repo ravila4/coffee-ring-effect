@@ -436,8 +436,8 @@ test('gap edges taper: deposit density falls gradually across a pinning ramp', (
   );
   // Mid-ramp stays fairly high (~0.8): displaced gap mass sloshes onto the
   // still-holding arcs and inflates the strong half of the transition. The
-  // taper lives in the weak half; the coin-flip gate put ~1.0 here and rose
-  // toward the gap.
+  // taper lives in the weak half; a binary release gate would sit at ~1.0
+  // here and rise toward the gap, which the upper bound excludes.
   const mid = rampBins[2] / strongPerBin;
   assert.ok(mid > 0.05 && mid < 0.92, `mid-ramp density ${mid.toFixed(2)} of full: not a taper`);
 });

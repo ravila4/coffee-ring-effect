@@ -25,9 +25,13 @@ export function paintStain(
       ctx.fillStyle = 'rgba(255,255,255,0.85)';
       for (const s of stain.splats) {
         ctx.beginPath();
-        // 0.25 × splat base ≈ the sim's deposit-grain scale (GRAIN·R): fence
-        // walls and veins stay resolvable instead of smearing into blobs.
-        ctx.arc(s.x, s.y, Math.max(0.55, s.r * 0.25), 0, 2 * Math.PI);
+        // 0.25 × the base the size law alone gives is the sim's own deposit
+        // grain: 0.25 × R·0.016 = R·0.004, the jitter scale the deposits were
+        // laid down at. This view is the instrument the Fig. 9 comparison is
+        // read off, so it sizes its dots from that law and ignores whatever
+        // grain the stain was painted with — fence walls and veins stay
+        // resolvable, and stay comparable between runs.
+        ctx.arc(s.x, s.y, Math.max(0.55, (s.rDefault ?? s.r) * 0.25), 0, 2 * Math.PI);
         ctx.fill();
       }
     } finally {

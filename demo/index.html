@@ -159,6 +159,7 @@
 </p>
 <script type="module">
 import { generateStainCanvas, paintStain } from '../src/render.js';
+import { queryFlag } from './query.js';
 
 const SIZE = 560;
 const grid = document.getElementById('grid');
@@ -181,7 +182,7 @@ const params = () => ({
   particles: 12000,
   darkField: $('dark').checked,
   ...($('weAuto').checked ? {} : { splashEnergy: weFrom($('we').value) }),
-  ...($('phiAuto').checked ? {} : { dropOverrides: { phi: phiFrom($('phi').value) } }),
+  ...($('phiAuto').checked ? {} : { phi: phiFrom($('phi').value) }),
 });
 
 const cells = [];
@@ -291,7 +292,7 @@ document.getElementById('rebrew').addEventListener('click', brew);
 showValues();
 // ?dark=1 boots straight into the microscope view (and lets the headless
 // screenshot loop verify it).
-if (new URLSearchParams(location.search).has('dark')) $('dark').click();
+if (queryFlag(location.search, 'dark')) $('dark').click();
 brew();
 </script>
 </body>

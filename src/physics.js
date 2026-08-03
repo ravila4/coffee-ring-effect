@@ -410,6 +410,11 @@ export function makeDropStepper({
   rng,
 } = {}) {
   if (!rng) throw new Error('makeDropStepper requires a seeded rng');
+  // null is the disk sentinel, not a missing value; anything else is the
+  // band's w/R_mid, a ratio of two lengths and so strictly positive.
+  if (!(bandAspect === null || (Number.isFinite(bandAspect) && bandAspect > 0))) {
+    throw new RangeError(`bandAspect must be null (a disk) or a positive ratio, got ${bandAspect}`);
+  }
 
   const dt = tEnd / steps;
   // Slosh diffusion normalized to the 300-step reference calibration.
@@ -596,7 +601,7 @@ export function makeDropStepper({
 
   let s = 0;
   let finished = false;
-  const isDone = () => freeRecession || s >= steps;
+  const isDone = () => finished || freeRecession || s >= steps;
 
   const stepOnce = () => {
     const t = s * dt;
@@ -772,8 +777,16 @@ export function makeDropStepper({
     s++;
   };
 
+  // Terminal: dries the drop out wherever it stands. Suspended particles
+  // settle, the run ends (done, no live particles, step() a no-op), and every
+  // read afterwards is the final state — calling it early is "the water ran
+  // out now", not a pause.
   const finish = () => {
     if (finished) return;
+    // "The water ran out now": an early call settles its leftovers at the
+    // current clock. Natural completion and free recession are real dry-outs
+    // and keep tEnd — the animation timeline is built on those dates.
+    const tStop = isDone() ? tEnd : s * dt;
     finished = true;
     if (!freeRecession) recordEpoch(null);
 
@@ -787,12 +800,14 @@ export function makeDropStepper({
     for (let i = 0; i < particles; i++) {
       if (alive[i]) leftovers.push({ rho: rho[i], theta: theta[i] });
     }
+    alive.fill(0);
+    aliveCount = 0;
     if (sweeping) {
       deposits.push(
         ...settleInterior({
           items: leftovers,
           total: particles,
-          tEnd,
+          tEnd: tStop,
           rng,
           forceSink: interiorSink,
           cuspSpacing: 0.05 + 0.02 * rng.random(),
@@ -801,7 +816,7 @@ export function makeDropStepper({
       );
     } else {
       for (const p of leftovers) {
-        deposits.push({ rho: p.rho, theta: p.theta, t: tEnd, pinned: false, sink: 'residue' });
+        deposits.push({ rho: p.rho, theta: p.theta, t: tStop, pinned: false, sink: 'residue' });
       }
     }
   };
@@ -842,6 +857,9 @@ export function simulateDrop(options) {
 // near the drip. relDensityAt is mass density relative to a uniform ring;
 // a single lobe with L ≫ π reads as uniform.
 export function makeSupplySampler(lobes = [{}]) {
+  if (!Array.isArray(lobes) || lobes.length === 0) {
+    throw new RangeError('makeSupplySampler needs at least one lobe');
+  }
   const parsed = lobes.map(
     ({ originTheta = 0, arcHalfLength = Math.PI, falloff = 1, weight = 1 }) => ({
       origin: wrap(originTheta),
@@ -850,6 +868,24 @@ export function makeSupplySampler(lobes = [{}]) {
       weight,
     }),
   );
+  // A lobe is a reach and a volume: both are lengths, both strictly positive.
+  // Origin and falloff get the same door — a NaN in either poisons the CDF
+  // into all-NaN, which the zero-mass guard below cannot see (NaN <= 0 is
+  // false), and the sampler would hand back NaN density.
+  for (const lobe of parsed) {
+    if (!Number.isFinite(lobe.origin)) {
+      throw new RangeError('lobe originTheta must be finite');
+    }
+    if (!Number.isFinite(lobe.L) || lobe.L <= 0) {
+      throw new RangeError(`lobe arcHalfLength must be finite and positive, got ${lobe.L}`);
+    }
+    if (!Number.isFinite(lobe.falloff) || lobe.falloff <= 0) {
+      throw new RangeError(`lobe falloff must be finite and positive, got ${lobe.falloff}`);
+    }
+    if (!Number.isFinite(lobe.weight) || lobe.weight <= 0) {
+      throw new RangeError(`lobe weight must be finite and positive, got ${lobe.weight}`);
+    }
+  }
   const massAt = (theta) => {
     let m = 0;
     for (const lobe of parsed) {
@@ -869,6 +905,11 @@ export function makeSupplySampler(lobes = [{}]) {
     cdf[k + 1] = cdf[k] + massAt(theta);
   }
   const total = cdf[N];
+  // Every lobe carries mass, but a reach below the grid spacing can still
+  // fall between bin centers; normalizing by that would hand back NaN.
+  if (total <= 0) {
+    throw new RangeError('supply lobes integrate to zero mass: reach is below the sampling grid');
+  }
   const integral = total * (TWO_PI / N);
   const relDensityAt = (theta) => (massAt(theta) * TWO_PI) / integral;
   const sample = (rng) => {

@@ -44,10 +44,10 @@ python3 -m http.server 8000      # then open http://localhost:8000/demo/
 
 ```js
 import { generateStainCanvas } from './src/render.js';
-const canvas = generateStainCanvas({ size: 560, seed: 42 });
+const { canvas } = generateStainCanvas({ size: 560, seed: 42 });
 el.style.backgroundImage = `url(${canvas.toDataURL()})`;
 ```
 
-Useful options: `type` ('drop' or 'mug'), `splashEnergy` (Weber-number stand-in; high values finger and splatter), and `dropOverrides.phi` (concentration; low values give sparse spoked interiors, high values give broad rims).
+Useful options: `type` ('drop' or 'mug'), `splashEnergy` (Weber-number stand-in; high values finger and splatter), and `phi` (concentration; low values give sparse spoked interiors, high values give broad rims).
 
 See `docs/research-notes.md` for the research this design came from, including why live SVG `feTurbulence` filters were rejected.

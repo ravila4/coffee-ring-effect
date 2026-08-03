@@ -144,8 +144,22 @@ export function buildStain({
   mugSupply = null, // lobe list [{originTheta, arcHalfLength, falloff, weight}] override for tests/art
   splashEnergy = null, // Weber-number stand-in; continuous draw when null
   canvasBound = DEFAULT_BOUND, // clip radius in units of the parent radius
-  dropOverrides = {},
+  phi = null, // pigment concentration; continuous draw when null
 } = {}) {
+  // The primary lobe sets the splash azimuth, so the override is read before
+  // any sampler runs and an empty list has nothing to aim at.
+  if (mugSupply !== null && (!Array.isArray(mugSupply) || mugSupply.length === 0)) {
+    throw new TypeError('mugSupply must be a non-empty array of lobes');
+  }
+  // Both are continuous draws when null and NaN geometry three modules later
+  // if garbage gets through. Zero splash is a legal gentle set-down; zero
+  // pigment is no stain at all.
+  if (phi !== null && !(Number.isFinite(phi) && phi > 0)) {
+    throw new RangeError(`phi must be finite and positive, got ${phi}`);
+  }
+  if (splashEnergy !== null && !(Number.isFinite(splashEnergy) && splashEnergy >= 0)) {
+    throw new RangeError(`splashEnergy must be finite and non-negative, got ${splashEnergy}`);
+  }
   // Independent random streams, forked from the seed. The particle sims eat
   // a φ-dependent number of draws and a hard splash grows more fingers, so a
   // single shared stream would let one knob shift the draws behind every
@@ -203,7 +217,7 @@ export function buildStain({
   // The draw always runs, override or not, so holding the slider at the
   // auto-drawn value reproduces the auto stain exactly.
   const phiDraw = Math.exp(rng.uniform(Math.log(0.0005), Math.log(0.03)));
-  const stainPhi = dropOverrides.phi ?? phiDraw;
+  const stainPhi = phi ?? phiDraw;
   // Mug composition: band width and how many times the cup was set down.
   const mugHalfWidth = stainType === 'mug' ? radius * rng.uniform(0.1, 0.16) : 0;
   const placements =
@@ -291,7 +305,7 @@ export function buildStain({
     });
   };
 
-  const addDrop = ({ rng, cx, cy, r, count, phi, spikes = null, overrides = {} }) => {
+  const addDrop = ({ rng, cx, cy, r, count, phi, spikes = null }) => {
     // Everything that shapes the footprint draws before the sim runs, so a φ
     // change (which alters how many numbers the sim eats) can only re-roll
     // the ring structure, never the contact line or the wash.
@@ -313,7 +327,6 @@ export function buildStain({
       phi,
       pinningAt: rng.random() < partialChance ? makePinning(rng) : null,
       rng,
-      ...overrides,
     });
     // Evaporative flux diverges at sharp finger tips, so tips darken. Bounded
     // enhancement — flux at a mathematically sharp tip is infinite, and an
@@ -333,7 +346,7 @@ export function buildStain({
     }
   };
 
-  const addMugRing = ({ rng, cx, cy, R, wBase, count, phi, supply, spikes = null, overrides = {} }) => {
+  const addMugRing = ({ rng, cx, cy, R, wBase, count, phi, supply, spikes = null }) => {
     // Same rule as addDrop: every draw that shapes the band contour and wash
     // happens before the sim, so φ only re-rolls what the physics deposits.
     const offW = rng.uniform(100, 200);
@@ -377,7 +390,6 @@ export function buildStain({
       sampleTheta: (r) => sampler.sample(r),
       pinningAt: rng.random() < partialChance ? makePinning(rng) : null,
       rng,
-      ...overrides,
     });
     // Same tip darkening as the drop's fingers: flux diverges at sharp tips.
     const shadeAt = spikes
@@ -441,7 +453,6 @@ export function buildStain({
                 arcHalfLength: lobe.arcHalfLength * rng.uniform(0.94, 1.06),
               })),
         spikes: k === 0 ? bandSpikes : null,
-        overrides: k === 0 ? dropOverrides : {},
       });
     }
   } else {
@@ -463,7 +474,6 @@ export function buildStain({
               sharpness: splashRng.uniform(2.2, 3.5),
             }
           : null,
-      overrides: dropOverrides,
     });
   }
 
@@ -589,11 +599,15 @@ export function generateStainCanvas({
   darkField = false,
   ...options
 } = {}) {
+  // A DOM canvas where there is a DOM: OffscreenCanvas has no toDataURL, so
+  // preferring it would break the documented "render once, keep the image"
+  // usage on the main thread. In a worker there is no document and the
+  // offscreen surface is the only option.
   const c =
     canvas ??
-    (typeof OffscreenCanvas !== 'undefined'
-      ? new OffscreenCanvas(size, size)
-      : document.createElement('canvas'));
+    (typeof document !== 'undefined'
+      ? document.createElement('canvas')
+      : new OffscreenCanvas(size, size));
   c.width = size;
   c.height = size;
   const stain = buildStain({

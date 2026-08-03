@@ -3,15 +3,11 @@ import assert from 'node:assert/strict';
 import { makeSupplySampler } from '../src/physics.js';
 import { buildStain } from '../src/render.js';
 import { makeRng } from '../src/rng.js';
+import { circDist } from './helpers.js';
 
 // The drip may run down the rim at more than one point. Each stream carries
 // its own volume (weight), so the supply is a list of lobes: big and small
 // arcs that merge where they touch and leave dry gaps where they don't.
-
-const arcDist = (a, b) => {
-  let d = Math.abs((((a - b) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI));
-  return d > Math.PI ? 2 * Math.PI - d : d;
-};
 
 const TWO_LOBES = [
   { originTheta: 0, arcHalfLength: 0.4 * Math.PI, falloff: 1, weight: 1 },
@@ -45,8 +41,8 @@ test('samples split across lobes in proportion to their volumes', () => {
   let primary = 0;
   for (let i = 0; i < n; i++) {
     const theta = s.sample(rng);
-    const inA = arcDist(theta, 0) <= 0.4 * Math.PI + 0.004;
-    const inB = arcDist(theta, Math.PI) <= 0.4 * Math.PI + 0.004;
+    const inA = circDist(theta, 0) <= 0.4 * Math.PI + 0.004;
+    const inB = circDist(theta, Math.PI) <= 0.4 * Math.PI + 0.004;
     assert.ok(inA || inB, `sample ${theta} landed in a dry gap`);
     if (inA) primary++;
   }
@@ -113,6 +109,61 @@ test('multi-drip draw yields a big primary and smaller extras', () => {
       assert.ok(lobe.arcHalfLength < stain.supply[0].arcHalfLength * 4, 'runaway extra reach');
     }
   }
+});
+
+// A lobe list that carries no coffee has no profile to sample: the CDF
+// normalizes by total mass, so these used to come back as silent NaN density.
+
+test('a supply with no lobes is rejected', () => {
+  assert.throws(() => makeSupplySampler([]), /lobe/);
+});
+
+test('lobe reach and volume must be finite and positive', () => {
+  for (const bad of [0, -1, NaN, Infinity]) {
+    assert.throws(
+      () => makeSupplySampler([{ originTheta: 0, arcHalfLength: bad, weight: 1 }]),
+      /arcHalfLength/,
+      `arcHalfLength ${bad} was accepted`,
+    );
+    assert.throws(
+      () => makeSupplySampler([{ originTheta: 0, arcHalfLength: 1, weight: bad }]),
+      /weight/,
+      `weight ${bad} was accepted`,
+    );
+  }
+});
+
+test('lobe origin and falloff must be finite', () => {
+  // A NaN in either poisons the CDF into all-NaN, which the zero-mass guard
+  // cannot see: NaN <= 0 is false, so the sampler would hand back NaN density.
+  for (const bad of [NaN, Infinity, -Infinity]) {
+    assert.throws(
+      () => makeSupplySampler([{ originTheta: bad, arcHalfLength: 1, falloff: 1 }]),
+      /originTheta/,
+      `originTheta ${bad} was accepted`,
+    );
+  }
+  for (const bad of [0, -1, NaN, Infinity]) {
+    assert.throws(
+      () => makeSupplySampler([{ originTheta: 0, arcHalfLength: 1, falloff: bad }]),
+      /falloff/,
+      `falloff ${bad} was accepted`,
+    );
+  }
+});
+
+test('a supply too narrow to carry any mass is rejected', () => {
+  // Positive but far below the CDF grid spacing: every bin integrates to zero.
+  assert.throws(() => makeSupplySampler([{ originTheta: 0, arcHalfLength: 1e-6 }]), /mass/);
+});
+
+test('a valid supply still samples after the guards', () => {
+  const s = makeSupplySampler(TWO_LOBES);
+  assert.ok(s.relDensityAt(0) > 0);
+  const theta = s.sample(makeRng(9));
+  assert.ok(Number.isFinite(theta) && theta >= 0 && theta <= 2 * Math.PI);
+  // The documented default is a single uniform-ish lobe with no arguments.
+  assert.ok(makeSupplySampler().relDensityAt(0) > 0);
 });
 
 test('drops carry no drip supply', () => {

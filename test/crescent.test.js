@@ -3,14 +3,10 @@ import assert from 'node:assert/strict';
 import { makeSupplySampler, widthFactor, simulateBand } from '../src/physics.js';
 import { buildStain } from '../src/render.js';
 import { makeRng } from '../src/rng.js';
+import { circDist } from './helpers.js';
 
 // A drip at the cup rim wicks along the rim-surface channel with finite volume:
 // smooth thick lobe at the origin, sharp tips, dry far side.
-
-const arcDist = (a, b) => {
-  let d = Math.abs((((a - b) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI));
-  return d > Math.PI ? 2 * Math.PI - d : d;
-};
 
 test('supply mass peaks smoothly at the drip and vanishes beyond the reach', () => {
   const s = makeSupplySampler([{ originTheta: 1, arcHalfLength: 0.6 * Math.PI, falloff: 1 }]);
@@ -34,7 +30,7 @@ test('sampled azimuths reproduce the supply profile', () => {
   const n = 20000;
   for (let i = 0; i < n; i++) {
     const theta = s.sample(rng);
-    const d = arcDist(theta, 0);
+    const d = circDist(theta, 0);
     assert.ok(d <= 0.7 * Math.PI + 1e-9, `sample outside support: ${d}`);
     bins[Math.min(23, Math.floor((d / (0.7 * Math.PI)) * 24))]++;
   }
@@ -79,7 +75,7 @@ test('the supply gap collects no deposits at all', () => {
     sampleTheta: (rng) => s.sample(rng),
   });
   // θ diffusion adds ~0.06 rad of smear plus pinning-fail slosh; allow slop.
-  const escaped = deposits.filter((d) => arcDist(d.theta, 0) > 0.5 * Math.PI + 0.5);
+  const escaped = deposits.filter((d) => circDist(d.theta, 0) > 0.5 * Math.PI + 0.5);
   assert.equal(escaped.length, 0, `${escaped.length} deposits in the dry gap`);
 });
 
@@ -92,7 +88,7 @@ test('band mass decays with arc distance from the drip', () => {
   });
   const counts = [0, 0, 0];
   for (const d of deposits) {
-    const f = arcDist(d.theta, 0) / (0.8 * Math.PI);
+    const f = circDist(d.theta, 0) / (0.8 * Math.PI);
     if (f < 1) counts[Math.min(2, Math.floor(f * 3))]++;
   }
   assert.ok(counts[0] > counts[1] && counts[1] > counts[2], `not monotone: ${counts}`);

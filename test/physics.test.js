@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   radialVelocity,
+  makeDropStepper,
   simulateDrop,
   simulateBand,
   buildKappaBins,
@@ -13,8 +14,7 @@ import {
   makeAnchorField,
 } from '../src/physics.js';
 import { makeRng } from '../src/rng.js';
-
-const normalizeTheta = (theta) => ((theta % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+import { normalizeTheta, circDist } from './helpers.js';
 
 test('radial velocity vanishes at the drop center', () => {
   assert.equal(radialVelocity(0, 0), 0);
@@ -343,6 +343,27 @@ test('simulation requires a seeded rng', () => {
   assert.throws(() => simulateDrop({ particles: 10 }));
 });
 
+// bandAspect is w/R_mid, a metric. Zero or negative has no geometry behind it
+// and only surfaces much later as a bad bin count.
+test('bandAspect must be null or a positive width-to-radius ratio', () => {
+  const opts = { particles: 20, steps: 5, rng: makeRng(1) };
+  for (const bad of [0, -0.12, NaN, Infinity, -Infinity]) {
+    assert.throws(
+      () => makeDropStepper({ ...opts, bandAspect: bad }),
+      /bandAspect/,
+      `bandAspect ${bad} was accepted`,
+    );
+  }
+});
+
+test('the disk sentinel and a real band aspect both build a stepper', () => {
+  const opts = { particles: 20, steps: 5, rng: makeRng(1) };
+  // null is the disk, not "no aspect given": it must survive the guard.
+  assert.equal(makeDropStepper({ ...opts, bandAspect: null }).aliveCount, 20);
+  assert.equal(makeDropStepper({ ...opts }).aliveCount, 20);
+  assert.equal(makeDropStepper({ ...opts, bandAspect: 0.12 }).aliveCount, 20);
+});
+
 test('unpinned sectors collect no jammed ring deposits (partial rings)', () => {
   const pinningAt = (theta) => (normalizeTheta(theta) < Math.PI ? 0 : 1);
   const { deposits } = simulateDrop({
@@ -462,11 +483,6 @@ test('interior sink is a genuine mixture in the mixed zone', () => {
   for (let i = 0; i < 200; i++) seen.add(chooseInteriorSink(0.12, rng));
   assert.ok(seen.has('arc') && seen.has('spoke'), `mixed zone gave only ${[...seen]}`);
 });
-
-const circDist = (a, b) => {
-  let off = Math.abs(normalizeTheta(a) - normalizeTheta(b));
-  return off > Math.PI ? 2 * Math.PI - off : off;
-};
 
 test('spoke-forced interior clusters deposits on the live cusp azimuths', () => {
   const rng = makeRng(302);

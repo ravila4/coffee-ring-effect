@@ -27,7 +27,7 @@ const mugAB = (phi) =>
     type: 'mug',
     overlapChance: 1,
     splashEnergy: 300,
-    dropOverrides: { phi },
+    phi,
   });
 
 test('φ is a physics knob on mugs: placements, splash, and satellites hold still', () => {
@@ -52,7 +52,7 @@ test('φ is a physics knob on drops: contact line and satellites hold still', ()
       particles: 500,
       type: 'drop',
       splashEnergy: 300,
-      dropOverrides: { phi },
+      phi,
     });
   const a = build(0.002);
   const b = build(0.03);
@@ -70,7 +70,7 @@ test('impact energy does not re-roll the composition', () => {
       type: 'mug',
       overlapChance: 1,
       splashEnergy: We,
-      dropOverrides: { phi: 0.01 },
+      phi: 0.01,
     });
   const a = build(40);
   const b = build(300);
@@ -85,16 +85,23 @@ test('impact energy does not re-roll the composition', () => {
   );
 });
 
+test('φ passed in is the stain φ; left out, it is drawn', () => {
+  const base = { seed: 5150, radius: 100, particles: 300, type: 'drop' };
+  assert.equal(buildStain({ ...base, phi: 0.011 }).phi, 0.011);
+  const drawn = buildStain(base).phi;
+  assert.ok(Number.isFinite(drawn) && drawn > 0, `φ was not drawn: ${drawn}`);
+});
+
 test('overriding φ at its auto-drawn value reproduces the auto stain exactly', () => {
   const base = { seed: 77, radius: 100, particles: 400, type: 'mug', splashEnergy: 120 };
   const auto = buildStain(base);
-  const held = buildStain({ ...base, dropOverrides: { phi: auto.phi } });
+  const held = buildStain({ ...base, phi: auto.phi });
   assert.deepEqual(held.splats, auto.splats);
   assert.deepEqual(held.washes, auto.washes);
 });
 
 test('overriding We at its auto-drawn value reproduces the auto stain exactly', () => {
-  const base = { seed: 78, radius: 100, particles: 400, type: 'drop', dropOverrides: { phi: 0.01 } };
+  const base = { seed: 78, radius: 100, particles: 400, type: 'drop', phi: 0.01 };
   const auto = buildStain(base);
   const held = buildStain({ ...base, splashEnergy: auto.splashEnergy });
   assert.deepEqual(held.splats, auto.splats);

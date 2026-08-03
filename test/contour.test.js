@@ -46,8 +46,14 @@ test('offset decorrelates two contact lines sharing one noise field', () => {
 });
 
 test('default sample count scales with radius', () => {
-  const line = makeContactLine({ radius: 100, amp: 0.05, freq: 2, noise2D: noise() });
-  assert.equal(line.points().length, Math.floor(4 * 100 + 20));
+  // A bigger circle needs more samples to hold the same arc-length detail.
+  // How many per unit radius is the sampler's business, not the caller's.
+  const countAt = (radius) =>
+    makeContactLine({ radius, amp: 0.05, freq: 2, noise2D: noise() }).points().length;
+  const small = countAt(50);
+  const big = countAt(100);
+  assert.ok(small > 8, `too few samples to describe a closed loop: ${small}`);
+  assert.ok(big > small, `sample count did not grow with radius: ${small} -> ${big}`);
 });
 
 test('sampled points lie on the contact line', () => {

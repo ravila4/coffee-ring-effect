@@ -1,6 +1,6 @@
 # coffee-ring-effect
 
-Procedural coffee stains from a particle simulation of the coffee-ring physics (Deegan et al.), for use as texture on a page. A stain is generated once, in 40 to 120 ms, and painted as often as you like after that. Every stain is a pure function of its seed. No dependencies, no build step: import the module by path.
+Procedural coffee stains from a particle simulation of the coffee-ring physics (Deegan et al.), for use as texture on a page. A stain is generated once, in 40 to 120 ms, and painted as often as you like after that. Every stain is a pure function of its seed; omit the seed and one is drawn at random and recorded on the stain, so any result can be reproduced. No dependencies, no build step: import the module by path.
 
 ![Six procedurally generated coffee stains in the demo grid: mug rings, a crescent, and splashed drops with scalloped dark rims and satellite specks](docs/demo-grid.png)
 
@@ -18,7 +18,7 @@ paintStains(ctx, [
 ]);
 ```
 
-`createStain` runs the simulation and returns plain serializable data in units of the stain's own radius — cache it, ship it as JSON, paint it at any size. `paintStains` places it: array order, one save/restore per placement, `opacity` on `globalAlpha`, multiply blend unless you pass `{ composite }`.
+`createStain` runs the simulation and returns plain serializable data in units of the stain's own radius — cache it, ship it as JSON, paint it at any size. `paintStains` places it: array order, one save/restore per placement, `opacity` multiplying whatever alpha the context already carries, multiply blend unless you pass `{ composite }`.
 
 Knobs: `type` ('drop' or 'mug'), `phi` (concentration — low gives sparse spoked interiors, high gives broad rims), `splashEnergy` (Weber-number stand-in; high values finger and splatter), `particles` (resolution, not ink). A droplet is not a third type: it is a small `'drop'` with few particles and no splash. See the module header for the rest.
 

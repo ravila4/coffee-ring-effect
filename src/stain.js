@@ -38,7 +38,7 @@ const WASH_POINTS = 600;
 // further than 0.5/radiusFraction radii from centre is clipped off the canvas
 // edge. Shrinking the fraction buys splatter headroom.
 export const DEFAULT_RADIUS_FRACTION = 0.26;
-const DEFAULT_BOUND = 0.5 / DEFAULT_RADIUS_FRACTION;
+export const DEFAULT_BOUND = 0.5 / DEFAULT_RADIUS_FRACTION;
 const WE_SPLASH = 30; // Weber-number stand-in below which nothing fingers
 
 // Fingers from the Rayleigh-Taylor instability of the decelerating rim:
@@ -172,6 +172,11 @@ export function composeStain({
   // every entry — buildStain and the texture API alike — gets the same door.
   if (mugSupply !== null && (!Array.isArray(mugSupply) || mugSupply.length === 0)) {
     throw new TypeError('mugSupply must be a non-empty array of lobes');
+  }
+  // An unrecognized type would fall through every stainType === 'mug' branch
+  // and come out as drop geometry wearing the wrong label.
+  if (type !== 'auto' && type !== 'drop' && type !== 'mug') {
+    throw new RangeError(`stain type must be 'drop', 'mug', or 'auto', got '${type}'`);
   }
   // Both are continuous draws when null and NaN geometry three modules later
   // if garbage gets through. Zero splash is a legal gentle set-down; zero
@@ -624,6 +629,12 @@ const SIZE_LAWS = {
 };
 
 export function scaleStain({ splats, washes }, radius) {
+  // ctx.arc silently returns on non-finite input, so a bad radius would not
+  // crash — it would paint nothing, invisibly. Every path to pixels funnels
+  // through here, which makes this the one door worth locking.
+  if (!(Number.isFinite(radius) && radius > 0)) {
+    throw new RangeError(`radius must be finite and positive, got ${radius}`);
+  }
   const scalePoints = (pts) => pts.map((p) => ({ x: p.x * radius, y: p.y * radius }));
   return {
     splats: splats.map((s) => {

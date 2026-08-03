@@ -18,40 +18,47 @@ export function paintStain(
     // washes, no pigment palette, dots near grain scale — the structural
     // skeleton (arch fences, veins, arcs) without the aesthetic blur on top.
     ctx.save();
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-    ctx.translate(cx, cy);
-    ctx.fillStyle = 'rgba(255,255,255,0.85)';
-    for (const s of stain.splats) {
-      ctx.beginPath();
-      // 0.25 × splat base ≈ the sim's deposit-grain scale (GRAIN·R): fence
-      // walls and veins stay resolvable instead of smearing into blobs.
-      ctx.arc(s.x, s.y, Math.max(0.55, s.r * 0.25), 0, 2 * Math.PI);
-      ctx.fill();
+    try {
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+      ctx.translate(cx, cy);
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      for (const s of stain.splats) {
+        ctx.beginPath();
+        // 0.25 × splat base ≈ the sim's deposit-grain scale (GRAIN·R): fence
+        // walls and veins stay resolvable instead of smearing into blobs.
+        ctx.arc(s.x, s.y, Math.max(0.55, s.r * 0.25), 0, 2 * Math.PI);
+        ctx.fill();
+      }
+    } finally {
+      ctx.restore();
     }
-    ctx.restore();
     return;
   }
   ctx.save();
-  ctx.translate(cx, cy);
-  // Multiply is how ink behaves on paper — darkening whatever it lands on —
-  // and it is the default for that reason. A caller compositing the stain
-  // over its own art may need a different rule, so the blend is theirs to set.
-  ctx.globalCompositeOperation = composite;
-  for (const w of stain.washes) {
-    ctx.beginPath();
-    trace(w.points);
-    if (w.holePoints) trace(w.holePoints);
-    ctx.fillStyle = `rgba(${w.color.join(',')},${w.alpha})`;
-    ctx.fill('evenodd');
+  try {
+    ctx.translate(cx, cy);
+    // Multiply is how ink behaves on paper — darkening whatever it lands on —
+    // and it is the default for that reason. A caller compositing the stain
+    // over its own art may need a different rule, so the blend is theirs to
+    // set.
+    ctx.globalCompositeOperation = composite;
+    for (const w of stain.washes) {
+      ctx.beginPath();
+      trace(w.points);
+      if (w.holePoints) trace(w.holePoints);
+      ctx.fillStyle = `rgba(${w.color.join(',')},${w.alpha})`;
+      ctx.fill('evenodd');
+    }
+    for (const s of stain.splats) {
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.rInk ?? s.r, 0, 2 * Math.PI);
+      ctx.fillStyle = `rgba(${s.color.join(',')},${s.alpha})`;
+      ctx.fill();
+    }
+  } finally {
+    ctx.restore();
   }
-  for (const s of stain.splats) {
-    ctx.beginPath();
-    ctx.arc(s.x, s.y, s.rInk ?? s.r, 0, 2 * Math.PI);
-    ctx.fillStyle = `rgba(${s.color.join(',')},${s.alpha})`;
-    ctx.fill();
-  }
-  ctx.restore();
 }
 
 export function generateStainCanvas({

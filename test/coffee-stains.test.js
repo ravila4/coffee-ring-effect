@@ -28,8 +28,6 @@ const recordingContext = ({ width = 400, height = 400 } = {}) => {
   }
   const ctx = { canvas, log };
   const methods = [
-    'save',
-    'restore',
     'translate',
     'rotate',
     'scale',
@@ -43,12 +41,24 @@ const recordingContext = ({ width = 400, height = 400 } = {}) => {
     'clearRect',
   ];
   for (const op of methods) ctx[op] = (...args) => log.push({ op, args });
-  for (const name of ['fillStyle', 'globalAlpha', 'globalCompositeOperation']) {
-    let value;
+  // Properties carry real initial values and honor save/restore, like the
+  // canvas they stand in for: opacity multiplies the alpha already on the
+  // context, so the double has to model that state to prove anything.
+  const props = { fillStyle: '#000', globalAlpha: 1, globalCompositeOperation: 'source-over' };
+  const stack = [];
+  ctx.save = () => {
+    stack.push({ ...props });
+    log.push({ op: 'save', args: [] });
+  };
+  ctx.restore = () => {
+    Object.assign(props, stack.pop() ?? {});
+    log.push({ op: 'restore', args: [] });
+  };
+  for (const name of Object.keys(props)) {
     Object.defineProperty(ctx, name, {
-      get: () => value,
+      get: () => props[name],
       set(v) {
-        value = v;
+        props[name] = v;
         log.push({ op: `${name}=`, args: [v] });
       },
     });
@@ -218,6 +228,69 @@ test('a droplet spec throws off no satellites', () => {
       assert.ok(reach <= 1.1, `seed ${seed}: splat ${reach.toFixed(3)} radii out`);
     }
   }
+});
+
+test('a seedless stain draws its own seed and records it', () => {
+  const { seed: _, ...spec } = dropletSpec;
+  const stain = createStain(spec);
+  assert.ok(Number.isInteger(stain.seed), `recorded seed: ${stain.seed}`);
+  // The recorded seed reproduces the stain exactly — randomness at the door,
+  // pure function of the seed behind it.
+  assert.deepEqual(createStain({ ...spec, seed: stain.seed }), stain);
+});
+
+test('two seedless stains are two different stains', () => {
+  const original = Math.random;
+  try {
+    const rolls = [0.1234, 0.9876];
+    Math.random = () => rolls.shift();
+    const { seed: _, ...spec } = dropletSpec;
+    assert.notEqual(createStain(spec).seed, createStain(spec).seed);
+  } finally {
+    Math.random = original;
+  }
+});
+
+test('an unknown type is rejected, not painted as a mislabeled drop', () => {
+  assert.throws(() => createStain({ type: 'espresso', seed: 1 }), /type/);
+});
+
+// ctx.arc silently returns on non-finite input, so a bad radius would paint
+// nothing at all — invisible failure, the worst kind for a texture.
+test('a placement without a usable radius throws instead of vanishing', () => {
+  const stain = createStain(dropletSpec);
+  for (const bad of [undefined, NaN, 0, -20, Infinity]) {
+    assert.throws(
+      () => paintStains(recordingContext(), [{ stain, x: 0, y: 0, radius: bad }]),
+      /radius/,
+      `radius ${bad} was accepted`,
+    );
+  }
+});
+
+test('a bad placement mid-scene leaves no save frame behind', () => {
+  const ctx = recordingContext();
+  const stain = createStain(dropletSpec);
+  assert.throws(() =>
+    paintStains(ctx, [
+      { stain, x: 10, y: 20, radius: 20 },
+      { stain, x: 30, y: 40, radius: NaN },
+    ]),
+  );
+  const count = (op) => ctx.log.filter((c) => c.op === op).length;
+  assert.equal(count('save'), count('restore'), 'a save frame leaked past the throw');
+});
+
+test('opacity multiplies the alpha already on the context', () => {
+  const ctx = recordingContext();
+  ctx.globalAlpha = 0.5; // the page's own fade
+  const stain = createStain(dropletSpec);
+  paintStains(ctx, [{ stain, x: 10, y: 20, radius: 20, opacity: 0.4 }]);
+  const [frame] = placementFrames(ctx.log.slice(1));
+  const sets = ownCalls(frame, 'globalAlpha=');
+  assert.equal(sets.length, 1, 'globalAlpha not set exactly once inside the placement');
+  assert.ok(Math.abs(sets[0].args[0] - 0.2) < 1e-12, `painted at ${sets[0].args[0]}, not 0.2`);
+  assert.equal(ctx.globalAlpha, 0.5, 'the fade did not survive the restore');
 });
 
 test('the public entry rejects an empty mug supply like buildStain does', () => {

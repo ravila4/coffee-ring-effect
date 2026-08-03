@@ -51,8 +51,8 @@
 <script type="module">
 import { createStain, paintStains } from '../src/coffee-stains.js';
 
-// Generated once. Painting is just placement after this — the same droplet
-// appears four times at four sizes.
+// Each stain is generated once; painting is just placement after this. The
+// same stain could go down again at another size without a new simulation.
 const mug = createStain({ type: 'mug', seed: 42, phi: 0.008, particles: 9000 });
 // A droplet is a small drop that landed gently: no splash to finger, no
 // satellites. Strong coffee (phi) keeps a 15 px drip legible; left to draw its

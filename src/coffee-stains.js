@@ -32,7 +32,7 @@
 //   phi        pigment — how strong the coffee is. This is the knob for a
 //              darker, broader, or sparser stain.
 
-import { composeStain, emitStain, scaleStain, DEFAULT_RADIUS_FRACTION } from './stain.js';
+import { composeStain, emitStain, scaleStain, DEFAULT_BOUND } from './stain.js';
 import { paintStain } from './render.js';
 
 // composeStain strikes the band radius, half-width and set-down offsets in
@@ -43,26 +43,22 @@ import { paintStain } from './render.js';
 // Change it and every seed paints a different stain.
 const CANONICAL_RADIUS = 145;
 
-// How far satellites may fly, in radii. Nothing clips a texture, but this is
-// the framing the splatter was tuned in, so it stays the default spread.
-const DEFAULT_BOUND = 0.5 / DEFAULT_RADIUS_FRACTION;
-
 export function createStain(spec = {}) {
+  // An omitted seed draws one and records it on the stain: a page can
+  // sprinkle fresh stains without bookkeeping, and any stain that comes out
+  // can still be reproduced from the seed it names. Randomness at the door,
+  // pure function of the seed behind it.
+  const seed = spec.seed ?? (Math.random() * 2 ** 32) >>> 0;
   const {
-    seed,
     particles = 3500,
     partialChance = 0.55,
+    // Nothing clips a texture, but the default spread stays the framing the
+    // splatter was tuned in.
     canvasBound = DEFAULT_BOUND,
     type = 'drop',
   } = spec;
-  const composition = composeStain({ ...spec, type, radius: CANONICAL_RADIUS });
-  const emitted = emitStain(composition, {
-    seed,
-    radius: CANONICAL_RADIUS,
-    particles,
-    partialChance,
-    canvasBound,
-  });
+  const composition = composeStain({ ...spec, seed, type, radius: CANONICAL_RADIUS });
+  const emitted = emitStain(composition, { particles, partialChance, canvasBound });
   return {
     ...emitted,
     seed,
@@ -77,16 +73,21 @@ export function createStain(spec = {}) {
 }
 
 // Paint a scene of placements in array order, each inside its own save frame:
-// { stain, x, y, radius, opacity = 1, rotation = 0 }. Opacity rides
-// globalAlpha, so it scales the stain's own per-splat alphas rather than
-// replacing them.
+// { stain, x, y, radius, opacity = 1, rotation = 0 }. Opacity multiplies the
+// alpha already on the context — a page-level fade applies to its stains the
+// same way the page's pixels show through the multiply blend — and scales the
+// stain's own per-splat alphas rather than replacing them.
 export function paintStains(ctx, scene, { composite = 'multiply' } = {}) {
   for (const { stain, x = 0, y = 0, radius, opacity = 1, rotation = 0 } of scene) {
+    const scaled = scaleStain(stain, radius);
     ctx.save();
-    ctx.globalAlpha = opacity;
-    ctx.translate(x, y);
-    if (rotation) ctx.rotate(rotation);
-    paintStain(ctx, scaleStain(stain, radius), { composite });
-    ctx.restore();
+    try {
+      ctx.globalAlpha *= opacity;
+      ctx.translate(x, y);
+      if (rotation) ctx.rotate(rotation);
+      paintStain(ctx, scaled, { composite });
+    } finally {
+      ctx.restore();
+    }
   }
 }
